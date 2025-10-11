@@ -28,13 +28,6 @@ class NodeBase {
       id = null,
     } = options;
 
-    const layout = options.layout ?? 'radial';
-    const pyramidFirstRowCount = Math.max(1, options.pyramidFirstRowCount ?? 1);
-    const pyramidRowIncrement = Math.max(0, options.pyramidRowIncrement ?? 1);
-    const pyramidHorizontalGap = options.pyramidHorizontalGap ?? 180;
-    const pyramidVerticalGap = options.pyramidVerticalGap ?? 160;
-    const isManuallyPositioned = Boolean(options.isManuallyPositioned);
-
     if (!canvas) {
       throw new Error('NodeBase requires a canvas element.');
     }
@@ -53,14 +46,6 @@ class NodeBase {
     this.pointerId = null;
     this.cards = {};
     this.id = id || `node-${++nodeIdCounter}`;
-    this.layout = layout;
-    this.pyramidFirstRowCount = pyramidFirstRowCount;
-    this.pyramidRowIncrement = pyramidRowIncrement;
-    this.pyramidHorizontalGap = pyramidHorizontalGap;
-    this.pyramidVerticalGap = pyramidVerticalGap;
-    this.isManuallyPositioned = isManuallyPositioned;
-    this.activeScale = 1;
-    this.dragMoved = false;
 
     this.element = this.createElement();
     this.canvas.appendChild(this.element);
@@ -140,52 +125,37 @@ class NodeBase {
     this.dragStart.y = event.clientY;
     this.positionStart.x = this.position.x;
     this.positionStart.y = this.position.y;
-    this.dragMoved = false;
-    const rect = this.canvas.getBoundingClientRect();
-    const baseWidth = this.canvas.offsetWidth || rect.width;
-    this.activeScale = baseWidth ? rect.width / baseWidth : 1;
     this.element.setPointerCapture(event.pointerId);
     this.element.classList.add('dragging');
   }
 
   onPointerMove(event) {
     if (!this.dragging || event.pointerId !== this.pointerId) return;
-    const dxRaw = event.clientX - this.dragStart.x;
-    const dyRaw = event.clientY - this.dragStart.y;
-    const dx = dxRaw / this.activeScale;
-    const dy = dyRaw / this.activeScale;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    if (!this.dragMoved && distance > 3) {
-      this.dragMoved = true;
-    }
-    this.setPosition(this.positionStart.x + dx, this.positionStart.y + dy, false);
+    const dx = event.clientX - this.dragStart.x;
+    const dy = event.clientY - this.dragStart.y;
+    this.setPosition(this.positionStart.x + dx, this.positionStart.y + dy);
   }
 
   onPointerUp(event) {
     if (event.pointerId !== this.pointerId) return;
     this.element.releasePointerCapture(event.pointerId);
+    const dx = Math.abs(event.clientX - this.dragStart.x);
+    const dy = Math.abs(event.clientY - this.dragStart.y);
+    const moved = Math.sqrt(dx * dx + dy * dy) > 6;
     this.dragging = false;
     this.pointerId = null;
     this.element.classList.remove('dragging');
-    if (!this.dragMoved) {
+    if (!moved) {
       this.toggleChildren();
-    } else {
-      this.isManuallyPositioned = true;
+    } else if (this.parent && this.parent.expanded) {
+      this.parent.layoutChildren();
     }
-    if (this.expanded) {
-      this.layoutChildren();
-    }
-    this.dragMoved = false;
   }
 
   onPointerCancel(event) {
     if (event.pointerId !== this.pointerId) return;
-    if (this.element.hasPointerCapture(event.pointerId)) {
-      this.element.releasePointerCapture(event.pointerId);
-    }
     this.dragging = false;
     this.pointerId = null;
-    this.dragMoved = false;
     this.element.classList.remove('dragging');
   }
 
@@ -215,51 +185,14 @@ class NodeBase {
 
   layoutChildren() {
     if (!this.expanded || !this.children.length) return;
-    if (this.layout === 'pyramid') {
-      this.layoutChildrenPyramid();
-      return;
-    }
-
-    this.children.forEach((child) => child.show());
-
-    const autoChildren = this.children.filter((child) => !child.isManuallyPositioned);
-    if (!autoChildren.length) return;
-
-    const count = autoChildren.length;
+    const count = this.children.length;
     const angleStep = (Math.PI * 2) / count;
-    autoChildren.forEach((child, index) => {
+    this.children.forEach((child, index) => {
       const angle = angleStep * index - Math.PI / 2;
       const { x, y } = polarToCartesian(this.childOrbit, angle);
+      child.show();
       child.setPosition(this.position.x + x, this.position.y + y);
     });
-  }
-
-  layoutChildrenPyramid() {
-    this.children.forEach((child) => child.show());
-
-    const autoChildren = this.children.filter((child) => !child.isManuallyPositioned);
-    if (!autoChildren.length) return;
-
-    const horizontalGap = this.pyramidHorizontalGap;
-    const verticalGap = this.pyramidVerticalGap;
-    let index = 0;
-    let row = 0;
-    let rowSize = this.pyramidFirstRowCount;
-
-    while (index < autoChildren.length) {
-      const remaining = autoChildren.length - index;
-      const nodesThisRow = Math.min(rowSize, remaining);
-      const offset = (nodesThisRow - 1) / 2;
-      for (let i = 0; i < nodesThisRow; i += 1) {
-        const child = autoChildren[index + i];
-        const x = this.position.x + (i - offset) * horizontalGap;
-        const y = this.position.y + verticalGap * (row + 1);
-        child.setPosition(x, y);
-      }
-      index += nodesThisRow;
-      row += 1;
-      rowSize += this.pyramidRowIncrement;
-    }
   }
 
   addChild(nodeOrConfig) {
@@ -288,11 +221,6 @@ class NodeBase {
       x: this.position.x + 80,
       y: this.position.y + 80,
       childOrbit: this.childOrbit * 0.8,
-      layout: this.layout,
-      pyramidFirstRowCount: this.pyramidFirstRowCount,
-      pyramidRowIncrement: this.pyramidRowIncrement,
-      pyramidHorizontalGap: this.pyramidHorizontalGap,
-      pyramidVerticalGap: this.pyramidVerticalGap,
     };
     return this.addChild({ ...defaults, ...config });
   }
