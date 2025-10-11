@@ -1,0 +1,11 @@
+{
+  "name": "node-display-games",
+  "version": "1.0.0",
+  "description": "Modular browser-based builder for creative writing projects",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "",
+  "license": "MIT"
+}
