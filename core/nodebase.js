@@ -26,12 +26,13 @@ class NodeBase {
       childOrbit = 220,
       parent = null,
       id = null,
-      layout = 'radial',
-      pyramidFirstRowCount = 1,
-      pyramidRowIncrement = 1,
-      pyramidHorizontalGap = 180,
-      pyramidVerticalGap = 160,
     } = options;
+
+    const layout = options.layout ?? 'radial';
+    const pyramidFirstRowCount = Math.max(1, options.pyramidFirstRowCount ?? 1);
+    const pyramidRowIncrement = Math.max(0, options.pyramidRowIncrement ?? 1);
+    const pyramidHorizontalGap = options.pyramidHorizontalGap ?? 180;
+    const pyramidVerticalGap = options.pyramidVerticalGap ?? 160;
 
     if (!canvas) {
       throw new Error('NodeBase requires a canvas element.');
@@ -52,8 +53,8 @@ class NodeBase {
     this.cards = {};
     this.id = id || `node-${++nodeIdCounter}`;
     this.layout = layout;
-    this.pyramidFirstRowCount = Math.max(1, pyramidFirstRowCount);
-    this.pyramidRowIncrement = Math.max(0, pyramidRowIncrement);
+    this.pyramidFirstRowCount = pyramidFirstRowCount;
+    this.pyramidRowIncrement = pyramidRowIncrement;
     this.pyramidHorizontalGap = pyramidHorizontalGap;
     this.pyramidVerticalGap = pyramidVerticalGap;
 
