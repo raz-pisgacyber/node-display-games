@@ -15,9 +15,9 @@ const init = () => {
     workspace.appendChild(canvas);
   }
 
-  const { clientWidth: canvasWidth, clientHeight: canvasHeight } = canvas;
-  const centerX = (canvasWidth || workspace.clientWidth) / 2;
-  const centerY = (canvasHeight || workspace.clientHeight) / 2;
+  const { clientWidth, clientHeight } = workspace;
+  const centerX = clientWidth / 2;
+  const centerY = clientHeight / 2;
 
   const rootNode = new ProjectNode({ canvas, x: centerX, y: centerY });
   rootNode.expandChildren();

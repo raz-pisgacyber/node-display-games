@@ -28,12 +28,6 @@ class NodeBase {
       id = null,
     } = options;
 
-    const layout = options.layout ?? 'radial';
-    const pyramidFirstRowCount = Math.max(1, options.pyramidFirstRowCount ?? 1);
-    const pyramidRowIncrement = Math.max(0, options.pyramidRowIncrement ?? 1);
-    const pyramidHorizontalGap = options.pyramidHorizontalGap ?? 180;
-    const pyramidVerticalGap = options.pyramidVerticalGap ?? 160;
-
     if (!canvas) {
       throw new Error('NodeBase requires a canvas element.');
     }
@@ -52,11 +46,6 @@ class NodeBase {
     this.pointerId = null;
     this.cards = {};
     this.id = id || `node-${++nodeIdCounter}`;
-    this.layout = layout;
-    this.pyramidFirstRowCount = pyramidFirstRowCount;
-    this.pyramidRowIncrement = pyramidRowIncrement;
-    this.pyramidHorizontalGap = pyramidHorizontalGap;
-    this.pyramidVerticalGap = pyramidVerticalGap;
 
     this.element = this.createElement();
     this.canvas.appendChild(this.element);
@@ -196,11 +185,6 @@ class NodeBase {
 
   layoutChildren() {
     if (!this.expanded || !this.children.length) return;
-    if (this.layout === 'pyramid') {
-      this.layoutChildrenPyramid();
-      return;
-    }
-
     const count = this.children.length;
     const angleStep = (Math.PI * 2) / count;
     this.children.forEach((child, index) => {
@@ -209,30 +193,6 @@ class NodeBase {
       child.show();
       child.setPosition(this.position.x + x, this.position.y + y);
     });
-  }
-
-  layoutChildrenPyramid() {
-    const horizontalGap = this.pyramidHorizontalGap;
-    const verticalGap = this.pyramidVerticalGap;
-    let index = 0;
-    let row = 0;
-    let rowSize = this.pyramidFirstRowCount;
-
-    while (index < this.children.length) {
-      const remaining = this.children.length - index;
-      const nodesThisRow = Math.min(rowSize, remaining);
-      const offset = (nodesThisRow - 1) / 2;
-      for (let i = 0; i < nodesThisRow; i += 1) {
-        const child = this.children[index + i];
-        const x = this.position.x + (i - offset) * horizontalGap;
-        const y = this.position.y + verticalGap * (row + 1);
-        child.show();
-        child.setPosition(x, y);
-      }
-      index += nodesThisRow;
-      row += 1;
-      rowSize += this.pyramidRowIncrement;
-    }
   }
 
   addChild(nodeOrConfig) {
@@ -261,11 +221,6 @@ class NodeBase {
       x: this.position.x + 80,
       y: this.position.y + 80,
       childOrbit: this.childOrbit * 0.8,
-      layout: this.layout,
-      pyramidFirstRowCount: this.pyramidFirstRowCount,
-      pyramidRowIncrement: this.pyramidRowIncrement,
-      pyramidHorizontalGap: this.pyramidHorizontalGap,
-      pyramidVerticalGap: this.pyramidVerticalGap,
     };
     return this.addChild({ ...defaults, ...config });
   }
