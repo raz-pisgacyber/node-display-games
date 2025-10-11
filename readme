@@ -1,1 +1,32 @@
-hello
+# Node Display Games Builder
+
+This project is a modular browser-based builder for organizing creative writing projects.
+
+## Running the Project Locally
+
+Modern browsers block ES module imports when loading files directly from the file system. To avoid the `Access to script ... has been blocked by CORS policy` error, serve the repository through a local web server instead of opening `project.html` with the `file://` protocol.
+
+### Option 1: Built-in Node server (recommended)
+1. Ensure you have Node.js installed.
+2. From the repository root run:
+   ```bash
+   npm start
+   ```
+3. Open http://localhost:8080/modules/project/project.html in your browser.
+
+### Option 2: Any static server
+You can also use other static servers such as:
+
+```bash
+npx http-server
+# or
+python -m http.server
+```
+
+Serve from the repository root and visit the same `/modules/project/project.html` path in your browser.
+
+## Project Structure
+- `core/` – shared utilities, base node logic, and styling.
+- `modules/project/` – project-specific node implementation and entry point.
+- `server.js` – lightweight static server used by `npm start`.
+
