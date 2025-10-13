@@ -51,7 +51,7 @@ class NodeBase {
     this.canvas.appendChild(this.element);
     this.setPosition(x, y, false);
     requestAnimationFrame(() => {
-      this.element.classList.add('visible');
+      fadeIn(this.element);
     });
 
     util.log('Node created', this.id, this.title);
