@@ -44,6 +44,8 @@ class NodeBase {
     this.dragStart = { x: 0, y: 0 };
     this.positionStart = { x: 0, y: 0 };
     this.pointerId = null;
+    this.currentScale = 1;
+    this.captureElement = null;
     this.cards = {};
     this.id = id || `node-${++nodeIdCounter}`;
 
@@ -117,6 +119,37 @@ class NodeBase {
     }
   }
 
+  getCanvasScale() {
+    if (!this.canvas) {
+      return 1;
+    }
+
+    const { scale } = this.canvas.dataset;
+    if (scale) {
+      const parsed = parseFloat(scale);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+
+    const transform = window.getComputedStyle(this.canvas).transform;
+    if (!transform || transform === 'none') {
+      return 1;
+    }
+
+    try {
+      const DOMMatrixCtor = window.DOMMatrixReadOnly || window.DOMMatrix;
+      if (DOMMatrixCtor) {
+        const matrix = new DOMMatrixCtor(transform);
+        return matrix.a || 1;
+      }
+    } catch (error) {
+      util.log('Failed to parse canvas scale from transform', error);
+    }
+
+    return 1;
+  }
+
   onPointerDown(event) {
     event.stopPropagation();
     this.dragging = true;
@@ -125,25 +158,47 @@ class NodeBase {
     this.dragStart.y = event.clientY;
     this.positionStart.x = this.position.x;
     this.positionStart.y = this.position.y;
-    this.element.setPointerCapture(event.pointerId);
+    this.currentScale = this.getCanvasScale();
+    const captureTarget = event.currentTarget;
+    if (captureTarget && captureTarget.setPointerCapture) {
+      try {
+        captureTarget.setPointerCapture(event.pointerId);
+        this.captureElement = captureTarget;
+      } catch (error) {
+        util.log('Failed to set pointer capture on node', this.id, error);
+        this.captureElement = null;
+      }
+    } else {
+      this.captureElement = null;
+    }
     this.element.classList.add('dragging');
   }
 
   onPointerMove(event) {
     if (!this.dragging || event.pointerId !== this.pointerId) return;
-    const dx = event.clientX - this.dragStart.x;
-    const dy = event.clientY - this.dragStart.y;
+    const scale = this.currentScale || 1;
+    const dx = (event.clientX - this.dragStart.x) / scale;
+    const dy = (event.clientY - this.dragStart.y) / scale;
     this.setPosition(this.positionStart.x + dx, this.positionStart.y + dy);
   }
 
   onPointerUp(event) {
     if (event.pointerId !== this.pointerId) return;
-    this.element.releasePointerCapture(event.pointerId);
-    const dx = Math.abs(event.clientX - this.dragStart.x);
-    const dy = Math.abs(event.clientY - this.dragStart.y);
+    if (this.captureElement?.releasePointerCapture) {
+      try {
+        this.captureElement.releasePointerCapture(event.pointerId);
+      } catch (error) {
+        util.log('Failed to release pointer capture on node', this.id, error);
+      }
+    }
+    const scale = this.currentScale || 1;
+    const dx = Math.abs(event.clientX - this.dragStart.x) / scale;
+    const dy = Math.abs(event.clientY - this.dragStart.y) / scale;
     const moved = Math.sqrt(dx * dx + dy * dy) > 6;
     this.dragging = false;
     this.pointerId = null;
+    this.currentScale = 1;
+    this.captureElement = null;
     this.element.classList.remove('dragging');
     if (!moved) {
       this.toggleChildren();
@@ -154,8 +209,17 @@ class NodeBase {
 
   onPointerCancel(event) {
     if (event.pointerId !== this.pointerId) return;
+    if (this.captureElement?.releasePointerCapture) {
+      try {
+        this.captureElement.releasePointerCapture(event.pointerId);
+      } catch (error) {
+        util.log('Failed to release pointer capture on cancel for node', this.id, error);
+      }
+    }
     this.dragging = false;
     this.pointerId = null;
+    this.currentScale = 1;
+    this.captureElement = null;
     this.element.classList.remove('dragging');
   }
 
