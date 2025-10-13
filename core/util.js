@@ -84,6 +84,9 @@ const util = {
 
     const applyTransform = () => {
       canvas.style.transform = `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`;
+      canvas.dataset.scale = String(state.scale);
+      canvas.dataset.translateX = String(state.translateX);
+      canvas.dataset.translateY = String(state.translateY);
     };
 
     const centerCanvas = () => {
