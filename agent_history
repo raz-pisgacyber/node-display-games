@@ -1,0 +1,4 @@
+## 2024-05-12
+- Reviewed drag behaviour for node marbles. Child nodes were realigned by the parent's automatic layout after pointer release, which snapped them back to their default orbit.
+- Added a `manualPosition` flag to `NodeBase` instances so that once a node is dragged it retains its dropped coordinates. Automatic layout now skips nodes flagged as manually positioned while still arranging the remaining nodes.
+- No automated tests are present in the project; behaviour verified by code inspection only. Future iterations should consider adding interaction tests for drag-and-drop flows if the runtime environment allows.
