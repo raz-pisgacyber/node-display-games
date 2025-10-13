@@ -19,6 +19,9 @@ class LinkManager {
     this.links = new Map();
     this.pendingSource = null;
     this.svg = this.ensureSvgLayer();
+
+    this.onCanvasPointerDown = this.handleCanvasPointerDown.bind(this);
+    this.canvas.addEventListener('pointerdown', this.onCanvasPointerDown);
   }
 
   ensureSvgLayer() {
@@ -35,20 +38,7 @@ class LinkManager {
   }
 
   beginLinking(node) {
-    if (this.pendingSource && this.pendingSource !== node) {
-      this.toggleLink(this.pendingSource, node);
-      this.clearPending();
-      return;
-    }
-
-    if (this.pendingSource === node) {
-      this.clearPending();
-      return;
-    }
-
-    this.pendingSource = node;
-    node.element.classList.add('node-linking');
-    util.log('Select another node to link with', node.title);
+    this.selectNode(node);
   }
 
   clearPending() {
@@ -75,6 +65,53 @@ class LinkManager {
       return;
     }
     this.createLink(nodeA, nodeB, id);
+  }
+
+  selectNode(node) {
+    if (!node) {
+      return;
+    }
+
+    if (!this.pendingSource) {
+      this.pendingSource = node;
+      node.element.classList.add('node-linking');
+      util.log('Select another node to link with', node.title);
+      return;
+    }
+
+    if (this.pendingSource === node) {
+      this.clearPending();
+      return;
+    }
+
+    this.toggleLink(this.pendingSource, node);
+    this.clearPending();
+  }
+
+  consumeNodePointerDown(node, event) {
+    if (!this.pendingSource) {
+      return false;
+    }
+
+    if (event?.target?.closest?.('.node-icon[data-action="link"]')) {
+      return false;
+    }
+
+    this.selectNode(node);
+    return true;
+  }
+
+  handleCanvasPointerDown(event) {
+    if (!this.pendingSource) {
+      return;
+    }
+
+    const targetNode = NodeBase.getNodeFromElement(event.target);
+    if (targetNode) {
+      return;
+    }
+
+    this.clearPending();
   }
 
   createLink(nodeA, nodeB, id) {
