@@ -44,6 +44,7 @@ class NodeBase {
     this.pointerSession = null;
     this.currentScale = 1;
     this.cards = {};
+    this.manualPosition = false;
     this.id = id || `node-${++nodeIdCounter}`;
 
     this.element = this.createElement();
@@ -221,6 +222,7 @@ class NodeBase {
 
     if (!session.moved && (Math.abs(dx) > 0 || Math.abs(dy) > 0)) {
       session.moved = true;
+      this.manualPosition = true;
     }
 
     this.setPosition(session.startPosition.x + dx, session.startPosition.y + dy);
@@ -267,9 +269,12 @@ class NodeBase {
     const count = this.children.length;
     const angleStep = (Math.PI * 2) / count;
     this.children.forEach((child, index) => {
+      child.show();
+      if (child.manualPosition) {
+        return;
+      }
       const angle = angleStep * index - Math.PI / 2;
       const { x, y } = polarToCartesian(this.childOrbit, angle);
-      child.show();
       child.setPosition(this.position.x + x, this.position.y + y);
     });
   }
@@ -285,6 +290,7 @@ class NodeBase {
     } else {
       child.parent = this;
     }
+    child.manualPosition = false;
     child.hide();
     this.children.push(child);
     if (this.expanded) {
