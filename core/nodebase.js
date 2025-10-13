@@ -50,6 +50,8 @@ class NodeBase {
     /** ✅ PATCH: Ensure every node has a link set for LinkManager */
     this.links = new Set();
 
+    NodeBase.registerInstance(this);
+
     this.element = this.createElement();
     this.canvas.appendChild(this.element);
     this.setPosition(x, y, false);
@@ -198,6 +200,14 @@ class NodeBase {
 
   onPointerDown(event) {
     if (event.button !== 0) return;
+
+    const linkManager = NodeBase.getActiveLinkManager();
+    if (linkManager?.consumeNodePointerDown?.(this, event)) {
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
+
     event.stopPropagation();
 
     if (this.pointerSession) {
@@ -446,5 +456,48 @@ class NodeBase {
 
 NodeBase.openCard = null;
 NodeBase.panelHost = null;
+NodeBase.activeLinkManager = null;
+NodeBase.instances = new Map();
+
+NodeBase.registerInstance = function registerInstance(instance) {
+  if (!instance?.id) {
+    return;
+  }
+  NodeBase.instances.set(instance.id, instance);
+};
+
+NodeBase.unregisterInstance = function unregisterInstance(instance) {
+  if (!instance?.id) {
+    return;
+  }
+  NodeBase.instances.delete(instance.id);
+};
+
+NodeBase.getNodeById = function getNodeById(id) {
+  return NodeBase.instances.get(id) || null;
+};
+
+NodeBase.getNodeFromElement = function getNodeFromElement(element) {
+  if (!element) {
+    return null;
+  }
+  const nodeEl = element.closest?.('.node');
+  if (!nodeEl) {
+    return null;
+  }
+  const { nodeId } = nodeEl.dataset;
+  if (!nodeId) {
+    return null;
+  }
+  return NodeBase.getNodeById(nodeId);
+};
+
+NodeBase.setActiveLinkManager = function setActiveLinkManager(manager) {
+  NodeBase.activeLinkManager = manager || null;
+};
+
+NodeBase.getActiveLinkManager = function getActiveLinkManager() {
+  return NodeBase.activeLinkManager || null;
+};
 
 export default NodeBase;

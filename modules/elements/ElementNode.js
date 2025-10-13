@@ -91,6 +91,7 @@ class ElementNode extends NodeBase {
 
   static attachLinkManager(manager) {
     ElementNode.linkManager = manager;
+    NodeBase.setActiveLinkManager(manager);
   }
 
   injectLinkIcon() {

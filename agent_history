@@ -2,3 +2,8 @@
 - Reviewed drag behaviour for node marbles. Child nodes were realigned by the parent's automatic layout after pointer release, which snapped them back to their default orbit.
 - Added a `manualPosition` flag to `NodeBase` instances so that once a node is dragged it retains its dropped coordinates. Automatic layout now skips nodes flagged as manually positioned while still arranging the remaining nodes.
 - No automated tests are present in the project; behaviour verified by code inspection only. Future iterations should consider adding interaction tests for drag-and-drop flows if the runtime environment allows.
+
+## 2024-05-13
+- Linking UI was non-functional: clicking a node's link icon did not create connections and no relationship handles rendered.
+- Added a shared node registry plus link-manager awareness to `NodeBase` so pending link selections can intercept pointer events before drag/toggle handlers run.
+- Taught `LinkManager` to manage pending selections, consume node clicks, cancel on background clicks, and reuse the logic from icon interactions. Verified linking/unlinking via Playwright-driven browser checks.
