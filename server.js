@@ -23,7 +23,7 @@ function getFilePath(urlPath) {
   const decodedPath = decodeURIComponent(urlPath.split('?')[0]);
   const safePath = path.normalize(decodedPath).replace(/^([/\\]?\.\.(?:[/\\]|$))+/, '');
   if (safePath === '/' || safePath === '') {
-    return path.join(BASE_DIR, 'modules', 'project', 'project.html');
+    return path.join(BASE_DIR, 'modules', 'main', 'index.html');
   }
   return path.join(BASE_DIR, safePath);
 }
