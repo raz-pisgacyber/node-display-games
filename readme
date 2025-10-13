@@ -12,7 +12,7 @@ Modern browsers block ES module imports when loading files directly from the fil
    ```bash
    npm start
    ```
-3. Open http://localhost:8080/modules/project/project.html in your browser.
+3. Open http://localhost:8080/ in your browser to access the main hub. From there you can jump into the Project or Elements builders.
 
 ### Option 2: Any static server
 You can also use other static servers such as:
@@ -23,10 +23,12 @@ npx http-server
 python -m http.server
 ```
 
-Serve from the repository root and visit the same `/modules/project/project.html` path in your browser.
+Serve from the repository root and visit `/modules/main/index.html` (or simply `/`) in your browser.
 
 ## Project Structure
 - `core/` – shared utilities, base node logic, and styling.
+- `modules/main/` – landing hub that links to the different builders.
 - `modules/project/` – project-specific node implementation and entry point.
+- `modules/elements/` – story element builder with typed nodes for characters, settings, and other artefacts.
 - `server.js` – lightweight static server used by `npm start`.
 
