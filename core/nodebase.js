@@ -47,6 +47,9 @@ class NodeBase {
     this.manualPosition = false;
     this.id = id || `node-${++nodeIdCounter}`;
 
+    /** ✅ PATCH: Ensure every node has a link set for LinkManager */
+    this.links = new Set();
+
     this.element = this.createElement();
     this.canvas.appendChild(this.element);
     this.setPosition(x, y, false);
