@@ -175,6 +175,7 @@ body {
   box-shadow: 0 18px 36px rgba(253, 121, 168, 0.45);
 }
 
+.element-node.element-place .node-marble,
 .element-node.element-setting .node-marble {
   box-shadow: 0 18px 36px rgba(85, 239, 196, 0.35);
 }
@@ -197,6 +198,10 @@ body {
   cursor: pointer;
   box-shadow: var(--node-shadow);
   transition: transform var(--transition-medium), box-shadow var(--transition-medium);
+}
+
+.node-linking .node-marble {
+  box-shadow: 0 0 0 6px rgba(108, 92, 231, 0.35), var(--node-shadow);
 }
 
 .node.expanded .node-marble,
@@ -329,4 +334,193 @@ body {
     align-items: stretch;
     background: rgba(11, 11, 19, 0.95);
   }
+}
+
+.element-links {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.element-link {
+  stroke: rgba(108, 92, 231, 0.5);
+  stroke-width: 3;
+  transition: stroke var(--transition-fast), opacity var(--transition-fast);
+}
+
+.element-link__handle {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  appearance: none;
+  border: none;
+  background: rgba(22, 22, 42, 0.9);
+  color: var(--text);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.4);
+  transition: transform var(--transition-fast), background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.element-link__handle:hover {
+  transform: translate(-50%, -50%) scale(1.05);
+  background: rgba(108, 92, 231, 0.85);
+}
+
+.element-link__handle:focus {
+  outline: 2px solid rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
+}
+
+.relationship-card textarea,
+.element-data-card textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.relationship-card__summary {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.relationship-card__remove {
+  appearance: none;
+  margin-top: 12px;
+  align-self: flex-start;
+  background: rgba(255, 77, 109, 0.16);
+  border: 1px solid rgba(255, 77, 109, 0.35);
+  color: #ff4d6d;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background var(--transition-fast), border var(--transition-fast), transform var(--transition-fast);
+}
+
+.relationship-card__remove:hover {
+  background: rgba(255, 77, 109, 0.28);
+  border-color: rgba(255, 77, 109, 0.55);
+  transform: translateY(-1px);
+}
+
+.element-data-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.element-data-card label {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.element-data-card input,
+.element-data-card textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 22, 0.9);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  min-height: auto;
+}
+
+.element-data-card__type {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: -4px;
+}
+
+.element-data-card__bigfive {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(22, 22, 42, 0.6);
+}
+
+.element-data-card__bigfive h3,
+.element-data-card__custom h3 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.element-data-card__custom {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.element-data-card__custom-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.element-data-card__custom-row {
+  display: grid;
+  grid-template-columns: 160px 1fr auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.element-data-card__custom-row input,
+.element-data-card__custom-row textarea {
+  margin: 0;
+}
+
+.element-data-card__custom-empty {
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.element-data-card__add-field {
+  align-self: flex-start;
+  appearance: none;
+  background: rgba(108, 92, 231, 0.2);
+  border: 1px solid rgba(108, 92, 231, 0.45);
+  color: var(--text);
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.element-data-card__add-field:hover {
+  background: rgba(108, 92, 231, 0.3);
+  transform: translateY(-1px);
+}
+
+.element-data-card__remove-field {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.element-data-card__remove-field:hover {
+  background: rgba(255, 77, 109, 0.28);
+  transform: translateY(-1px);
 }

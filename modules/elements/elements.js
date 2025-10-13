@@ -1,5 +1,6 @@
 import util, { enableZoomPan } from '../../core/util.js';
-import { ElementNode, CharacterNode, SettingNode, OtherNode } from './ElementNode.js';
+import { ElementNode, CharacterNode, PlaceNode, OtherNode } from './ElementNode.js';
+import LinkManager from './LinkManager.js';
 
 class ElementsRootNode extends ElementNode {
   constructor(options = {}) {
@@ -20,7 +21,7 @@ class ElementsRootNode extends ElementNode {
 
     const starterConfigs = [
       { type: 'character', title: 'Characters' },
-      { type: 'setting', title: 'Settings' },
+      { type: 'place', title: 'Places' },
       { type: 'other', title: 'Story Threads' },
     ];
 
@@ -53,6 +54,9 @@ const init = () => {
   const centerX = clientWidth / 2;
   const centerY = clientHeight / 2;
 
+  const linkManager = new LinkManager(canvas);
+  ElementNode.attachLinkManager(linkManager);
+
   const rootNode = new ElementsRootNode({ canvas, x: centerX, y: centerY });
   rootNode.ensureStarterNodes();
 
@@ -65,8 +69,9 @@ const init = () => {
     rootNode,
     ElementNode,
     CharacterNode,
-    SettingNode,
+    PlaceNode,
     OtherNode,
+    LinkManager,
   };
 };
 
