@@ -149,7 +149,9 @@ const util = {
       if (event.pointerId !== state.pointerId) return;
       state.panning = false;
       state.pointerId = null;
-      workspace.releasePointerCapture(event.pointerId);
+      if (workspace.hasPointerCapture?.(event.pointerId)) {
+        workspace.releasePointerCapture(event.pointerId);
+      }
     };
 
     workspace.addEventListener('wheel', onWheel, { passive: false });
