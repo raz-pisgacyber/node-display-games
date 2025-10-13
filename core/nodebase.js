@@ -41,9 +41,7 @@ class NodeBase {
     this.children = [];
     this.expanded = false;
     this.dragging = false;
-    this.dragStart = { x: 0, y: 0 };
-    this.positionStart = { x: 0, y: 0 };
-    this.pointerId = null;
+    this.pointerSession = null;
     this.currentScale = 1;
     this.cards = {};
     this.id = id || `node-${++nodeIdCounter}`;
@@ -149,38 +147,44 @@ class NodeBase {
     return 1;
   }
 
-  onPointerDown(event) {
-    event.stopPropagation();
-    this.dragging = true;
-    this.pointerId = event.pointerId;
-    this.dragStart.x = event.clientX;
-    this.dragStart.y = event.clientY;
-    this.positionStart.x = this.position.x;
-    this.positionStart.y = this.position.y;
-    this.currentScale = this.getCanvasScale();
-    this.element.setPointerCapture(event.pointerId);
-    this.element.classList.add('dragging');
+  beginPointerSession(event) {
+    const captureElement = event.currentTarget;
+    if (!captureElement || typeof captureElement.setPointerCapture !== 'function') {
+      return null;
+    }
+
+    const session = {
+      id: event.pointerId,
+      captureElement,
+      startClient: { x: event.clientX, y: event.clientY },
+      startPosition: { x: this.position.x, y: this.position.y },
+      moved: false,
+    };
+
+    captureElement.setPointerCapture(event.pointerId);
+    return session;
   }
 
-  onPointerMove(event) {
-    if (!this.dragging || event.pointerId !== this.pointerId) return;
-    const scale = this.currentScale || 1;
-    const dx = (event.clientX - this.dragStart.x) / scale;
-    const dy = (event.clientY - this.dragStart.y) / scale;
-    this.setPosition(this.positionStart.x + dx, this.positionStart.y + dy);
-  }
+  endPointerSession(event, session, cancelled = false) {
+    const { captureElement, startClient } = session;
+    if (captureElement?.hasPointerCapture?.(event.pointerId)) {
+      captureElement.releasePointerCapture(event.pointerId);
+    }
 
-  onPointerUp(event) {
-    if (event.pointerId !== this.pointerId) return;
-    this.element.releasePointerCapture(event.pointerId);
     const scale = this.currentScale || 1;
-    const dx = Math.abs(event.clientX - this.dragStart.x) / scale;
-    const dy = Math.abs(event.clientY - this.dragStart.y) / scale;
-    const moved = Math.sqrt(dx * dx + dy * dy) > 6;
+    const dx = Math.abs(event.clientX - startClient.x) / scale;
+    const dy = Math.abs(event.clientY - startClient.y) / scale;
+    const moved = session.moved || Math.sqrt(dx * dx + dy * dy) > 6;
+
     this.dragging = false;
-    this.pointerId = null;
+    this.pointerSession = null;
     this.currentScale = 1;
     this.element.classList.remove('dragging');
+
+    if (cancelled) {
+      return;
+    }
+
     if (!moved) {
       this.toggleChildren();
     } else if (this.parent && this.parent.expanded) {
@@ -188,13 +192,50 @@ class NodeBase {
     }
   }
 
+  onPointerDown(event) {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+
+    if (this.pointerSession) {
+      return;
+    }
+
+    this.currentScale = this.getCanvasScale();
+    const session = this.beginPointerSession(event);
+    if (!session) {
+      return;
+    }
+
+    this.dragging = true;
+    this.pointerSession = session;
+    this.element.classList.add('dragging');
+  }
+
+  onPointerMove(event) {
+    const session = this.pointerSession;
+    if (!this.dragging || !session || event.pointerId !== session.id) return;
+
+    const scale = this.currentScale || 1;
+    const dx = (event.clientX - session.startClient.x) / scale;
+    const dy = (event.clientY - session.startClient.y) / scale;
+
+    if (!session.moved && (Math.abs(dx) > 0 || Math.abs(dy) > 0)) {
+      session.moved = true;
+    }
+
+    this.setPosition(session.startPosition.x + dx, session.startPosition.y + dy);
+  }
+
+  onPointerUp(event) {
+    const session = this.pointerSession;
+    if (!session || event.pointerId !== session.id) return;
+    this.endPointerSession(event, session, false);
+  }
+
   onPointerCancel(event) {
-    if (event.pointerId !== this.pointerId) return;
-    this.element.releasePointerCapture(event.pointerId);
-    this.dragging = false;
-    this.pointerId = null;
-    this.currentScale = 1;
-    this.element.classList.remove('dragging');
+    const session = this.pointerSession;
+    if (!session || event.pointerId !== session.id) return;
+    this.endPointerSession(event, session, true);
   }
 
   toggleChildren() {
