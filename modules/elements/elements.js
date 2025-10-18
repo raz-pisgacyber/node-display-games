@@ -1,3 +1,4 @@
+import NodeBase from '../../core/nodebase.js';
 import util, { enableZoomPan } from '../../core/util.js';
 import { ElementNode, CharacterNode, PlaceNode, OtherNode } from './ElementNode.js';
 import LinkManager from './LinkManager.js';
@@ -59,6 +60,18 @@ const init = () => {
 
   const rootNode = new ElementsRootNode({ canvas, x: centerX, y: centerY });
   rootNode.ensureStarterNodes();
+  NodeBase.setLastInteractedNode(rootNode);
+
+  const addButton = document.getElementById('add-element');
+  if (addButton) {
+    addButton.addEventListener('click', () => {
+      const target = NodeBase.getLastInteractedNode();
+      const parent = target instanceof ElementNode ? target : rootNode;
+      if (typeof parent.promptForChild === 'function') {
+        parent.promptForChild();
+      }
+    });
+  }
 
   enableZoomPan(workspace, canvas);
 

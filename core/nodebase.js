@@ -79,6 +79,7 @@ class NodeBase {
       button.textContent = label;
       button.addEventListener('click', (event) => {
         event.stopPropagation();
+        NodeBase.setLastInteractedNode?.(this);
         this.handleIconAction(action);
       });
       return button;
@@ -209,6 +210,7 @@ class NodeBase {
     }
 
     event.stopPropagation();
+    NodeBase.setLastInteractedNode?.(this);
 
     if (this.pointerSession) {
       return;
@@ -458,6 +460,7 @@ NodeBase.openCard = null;
 NodeBase.panelHost = null;
 NodeBase.activeLinkManager = null;
 NodeBase.instances = new Map();
+NodeBase.lastInteractedNode = null;
 
 NodeBase.registerInstance = function registerInstance(instance) {
   if (!instance?.id) {
@@ -498,6 +501,18 @@ NodeBase.setActiveLinkManager = function setActiveLinkManager(manager) {
 
 NodeBase.getActiveLinkManager = function getActiveLinkManager() {
   return NodeBase.activeLinkManager || null;
+};
+
+NodeBase.setLastInteractedNode = function setLastInteractedNode(node) {
+  if (node instanceof NodeBase) {
+    NodeBase.lastInteractedNode = node;
+  } else if (!node) {
+    NodeBase.lastInteractedNode = null;
+  }
+};
+
+NodeBase.getLastInteractedNode = function getLastInteractedNode() {
+  return NodeBase.lastInteractedNode || null;
 };
 
 export default NodeBase;
