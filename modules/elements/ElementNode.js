@@ -44,6 +44,7 @@ class ElementNode extends NodeBase {
     const initialData = ElementNode.cloneData(options.data);
     this.data = this.ensureDataShape(initialData);
 
+    this.removeAddIcon();
     this.injectLinkIcon();
   }
 
@@ -92,6 +93,14 @@ class ElementNode extends NodeBase {
   static attachLinkManager(manager) {
     ElementNode.linkManager = manager;
     NodeBase.setActiveLinkManager(manager);
+  }
+
+  removeAddIcon() {
+    const iconBar = this.element.querySelector('.node-icons');
+    const addButton = iconBar?.querySelector('[data-action="add"]');
+    if (addButton) {
+      addButton.remove();
+    }
   }
 
   injectLinkIcon() {

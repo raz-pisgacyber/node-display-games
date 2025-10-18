@@ -7,3 +7,8 @@
 - Linking UI was non-functional: clicking a node's link icon did not create connections and no relationship handles rendered.
 - Added a shared node registry plus link-manager awareness to `NodeBase` so pending link selections can intercept pointer events before drag/toggle handlers run.
 - Taught `LinkManager` to manage pending selections, consume node clicks, cancel on background clicks, and reuse the logic from icon interactions. Verified linking/unlinking via Playwright-driven browser checks.
+
+## 2025-10-18
+- Replaced the per-node ➕ control in the elements builder with a toolbar-level "Add Element" action that targets the most recently interacted element node.
+- Added styling for the new toolbar button and taught `NodeBase` to remember the last interacted node so global actions attach to the expected parent.
+- Cleared the completed todo entry to reflect that no outstanding tasks remain.
