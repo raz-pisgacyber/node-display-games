@@ -89,6 +89,7 @@ const util = {
       pointerId: null,
       start: { x: 0, y: 0 },
       translateStart: { x: 0, y: 0 },
+      transitionTimer: null,
     };
 
     const notifyTransform = () => {
@@ -101,6 +102,7 @@ const util = {
       workspace.dispatchEvent(
         new CustomEvent('workspace:transform', {
           detail,
+          bubbles: true,
         })
       );
     };
@@ -115,13 +117,44 @@ const util = {
       }
     };
 
+    const withCanvasTransition = (animate, callback) => {
+      if (!animate) {
+        callback();
+        return;
+      }
+
+      if (state.transitionTimer) {
+        window.clearTimeout(state.transitionTimer);
+        state.transitionTimer = null;
+      }
+
+      let finished = false;
+      const finish = () => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        canvas.classList.remove('canvas-transition');
+        canvas.removeEventListener('transitionend', finish);
+        if (state.transitionTimer) {
+          window.clearTimeout(state.transitionTimer);
+          state.transitionTimer = null;
+        }
+      };
+
+      canvas.classList.add('canvas-transition');
+      canvas.addEventListener('transitionend', finish, { once: true });
+      state.transitionTimer = window.setTimeout(finish, 380);
+      callback();
+    };
+
     const centerCanvas = () => {
       const workspaceRect = workspace.getBoundingClientRect();
       const canvasWidth = canvas.offsetWidth * state.scale;
       const canvasHeight = canvas.offsetHeight * state.scale;
       state.translateX = (workspaceRect.width - canvasWidth) / 2;
       state.translateY = (workspaceRect.height - canvasHeight) / 2;
-      applyTransform();
+      withCanvasTransition(true, () => applyTransform());
     };
 
     applyTransform(false);
@@ -206,22 +239,22 @@ const util = {
         if (typeof scale === 'number') {
           state.scale = Math.min(state.maxScale, Math.max(state.minScale, scale));
         }
-        if (typeof translateX === 'number') {
-          state.translateX = translateX;
-        }
-        if (typeof translateY === 'number') {
-          state.translateY = translateY;
-        }
-        if (!animate) {
-          canvas.classList.add('no-transition');
-        }
+      if (typeof translateX === 'number') {
+        state.translateX = translateX;
+      }
+      if (typeof translateY === 'number') {
+        state.translateY = translateY;
+      }
+      if (!animate) {
+        canvas.classList.add('no-transition');
         applyTransform();
-        if (!animate) {
-          requestAnimationFrame(() => {
-            canvas.classList.remove('no-transition');
-          });
-        }
-      },
+        requestAnimationFrame(() => {
+          canvas.classList.remove('no-transition');
+        });
+        return;
+      }
+      withCanvasTransition(true, () => applyTransform());
+    },
       reset({ animate = true } = {}) {
         state.scale = settings.initialScale;
         state.translateX = settings.initialTranslate?.x ?? 0;
@@ -232,13 +265,44 @@ const util = {
         }
         if (!animate) {
           canvas.classList.add('no-transition');
-        }
-        applyTransform();
-        if (!animate) {
+          applyTransform();
           requestAnimationFrame(() => {
             canvas.classList.remove('no-transition');
           });
+          return;
         }
+        withCanvasTransition(true, () => applyTransform());
+      },
+      focusOn(point, options = {}) {
+        if (!point || typeof point.x !== 'number' || typeof point.y !== 'number') {
+          return;
+        }
+        const { x, y } = point;
+        const {
+          scale = state.scale,
+          animate = true,
+          offset = { x: 0, y: 0 },
+        } = options;
+
+        state.scale = Math.min(state.maxScale, Math.max(state.minScale, scale));
+
+        const workspaceRect = workspace.getBoundingClientRect();
+        const offsetX = offset?.x ?? 0;
+        const offsetY = offset?.y ?? 0;
+
+        state.translateX = workspaceRect.width / 2 + offsetX - x * state.scale;
+        state.translateY = workspaceRect.height / 2 + offsetY - y * state.scale;
+
+        if (!animate) {
+          canvas.classList.add('no-transition');
+          applyTransform();
+          requestAnimationFrame(() => {
+            canvas.classList.remove('no-transition');
+          });
+          return;
+        }
+
+        withCanvasTransition(true, () => applyTransform());
       },
       destroy() {
         workspace.removeEventListener('wheel', onWheel);
@@ -246,6 +310,10 @@ const util = {
         workspace.removeEventListener('pointermove', onPointerMove);
         workspace.removeEventListener('pointerup', stopPan);
         workspace.removeEventListener('pointercancel', stopPan);
+        if (state.transitionTimer) {
+          window.clearTimeout(state.transitionTimer);
+          state.transitionTimer = null;
+        }
       },
     };
   },

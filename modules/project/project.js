@@ -10,15 +10,25 @@ const init = () => {
 
   const canvas = ensureCanvas(workspace, { width: 2400, height: 2400 });
 
-  const { clientWidth, clientHeight } = workspace;
-  const centerX = clientWidth / 2;
-  const centerY = Math.max(180, clientHeight * 0.25);
+  const canvasCenterX = canvas.offsetWidth / 2;
+  const canvasCenterY = Math.max(220, canvas.offsetHeight * 0.24);
 
-  const rootNode = new ProjectNode({ canvas, x: centerX, y: centerY });
+  const rootNode = new ProjectNode({ canvas, x: canvasCenterX, y: canvasCenterY });
 
   const viewport = enableZoomPan(workspace, canvas, {
     minScale: 0.5,
     maxScale: 2.4,
+    centerOnLoad: false,
+  });
+
+  requestAnimationFrame(() => {
+    viewport.focusOn(
+      { x: rootNode.position.x, y: rootNode.position.y },
+      {
+        scale: 0.82,
+        offset: { x: 0, y: -Math.max(140, workspace.clientHeight * 0.18) },
+      }
+    );
   });
 
   log('Project builder initialised.');

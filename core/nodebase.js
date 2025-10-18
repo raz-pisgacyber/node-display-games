@@ -228,6 +228,9 @@ class NodeBase {
       });
     }
     NodeBase.activeLinkManager?.updateLinksForNode?.(this);
+    if (NodeBase.openCardOwner === this && NodeBase.openCard) {
+      this.positionCard(NodeBase.openCard);
+    }
   }
 
   getCanvasScale() {
@@ -340,6 +343,7 @@ class NodeBase {
     const session = this.pointerSession;
     if (!this.dragging || !session || event.pointerId !== session.id) return;
 
+    this.currentScale = this.getCanvasScale();
     const scale = this.currentScale || 1;
     const dx = (event.clientX - session.startClient.x) / scale;
     const dy = (event.clientY - session.startClient.y) / scale;
@@ -490,14 +494,22 @@ class NodeBase {
     NodeBase.hideOpenCard();
     if (!isVisible) {
       NodeBase.openCard = card;
+      NodeBase.openCardOwner = this;
       card.classList.add('visible');
       card.classList.remove('hidden');
+      this.positionCard(card);
+      requestAnimationFrame(() => {
+        if (NodeBase.openCard === card) {
+          this.positionCard(card);
+        }
+      });
     }
   }
 
   ensureCard(type) {
     if (this.cards[type]) return this.cards[type];
     const host = ensurePanelHost();
+    NodeBase.attachCardPositionListeners?.();
     const card = document.createElement('div');
     card.className = 'side-card hidden';
     card.dataset.nodeId = this.id;
@@ -578,6 +590,65 @@ class NodeBase {
     return card;
   }
 
+  positionCard(card) {
+    if (!card || !this.marbleElement) {
+      return;
+    }
+
+    const marbleRect = this.marbleElement.getBoundingClientRect();
+    if (!marbleRect?.width && !marbleRect?.height) {
+      return;
+    }
+
+    const cardWidth = card.offsetWidth || card.getBoundingClientRect().width;
+    const cardHeight = card.offsetHeight || card.getBoundingClientRect().height;
+
+    if (!cardWidth || !cardHeight) {
+      return;
+    }
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const padding = 16;
+
+    let left = marbleRect.right + padding;
+    let top = marbleRect.top;
+    let horizontal = 'right';
+
+    if (left + cardWidth > viewportWidth - padding) {
+      left = marbleRect.left - cardWidth - padding;
+      horizontal = 'left';
+    }
+
+    if (left < padding) {
+      left = Math.max(padding, Math.min(viewportWidth - cardWidth - padding, marbleRect.left + padding));
+    }
+
+    const maxTop = viewportHeight - cardHeight - padding;
+    let anchoredTop = marbleRect.top;
+
+    if (anchoredTop < padding) {
+      anchoredTop = padding;
+    }
+
+    if (anchoredTop > maxTop) {
+      anchoredTop = Math.max(padding, Math.min(maxTop, marbleRect.bottom - cardHeight));
+    }
+
+    top = Math.min(Math.max(anchoredTop, padding), maxTop);
+
+    const anchoredAbove = top <= marbleRect.top;
+
+    card.style.left = `${Math.round(left)}px`;
+    card.style.top = `${Math.round(top)}px`;
+    card.style.right = 'auto';
+    card.style.bottom = 'auto';
+    card.dataset.anchor = horizontal;
+    card.dataset.verticalAnchor = anchoredAbove ? 'top' : 'bottom';
+    card.style.setProperty('--card-shift-x', horizontal === 'left' ? '-24px' : '24px');
+    card.style.setProperty('--card-shift-y', anchoredAbove ? '-12px' : '12px');
+  }
+
   setTitle(newTitle) {
     this.title = newTitle || 'Untitled';
     const titleEl = this.element.querySelector('.node-title');
@@ -616,6 +687,7 @@ class NodeBase {
     NodeBase.openCard.classList.remove('visible');
     NodeBase.openCard.classList.add('hidden');
     NodeBase.openCard = null;
+    NodeBase.openCardOwner = null;
   }
 }
 
@@ -624,6 +696,8 @@ NodeBase.panelHost = null;
 NodeBase.activeLinkManager = null;
 NodeBase.instances = new Map();
 NodeBase.lastInteractedNode = null;
+NodeBase.openCardOwner = null;
+NodeBase.cardListenersAttached = false;
 
 NodeBase.registerInstance = function registerInstance(instance) {
   if (!instance?.id) {
@@ -635,6 +709,9 @@ NodeBase.registerInstance = function registerInstance(instance) {
 NodeBase.unregisterInstance = function unregisterInstance(instance) {
   if (!instance?.id) {
     return;
+  }
+  if (NodeBase.openCardOwner === instance) {
+    NodeBase.hideOpenCard();
   }
   NodeBase.instances.delete(instance.id);
 };
@@ -676,6 +753,24 @@ NodeBase.setLastInteractedNode = function setLastInteractedNode(node) {
 
 NodeBase.getLastInteractedNode = function getLastInteractedNode() {
   return NodeBase.lastInteractedNode || null;
+};
+
+NodeBase.repositionOpenCard = function repositionOpenCard() {
+  if (!NodeBase.openCard || !NodeBase.openCardOwner) {
+    return;
+  }
+  NodeBase.openCardOwner.positionCard(NodeBase.openCard);
+};
+
+NodeBase.attachCardPositionListeners = function attachCardPositionListeners() {
+  if (NodeBase.cardListenersAttached) {
+    return;
+  }
+  const handler = () => NodeBase.repositionOpenCard();
+  window.addEventListener('resize', handler);
+  window.addEventListener('scroll', handler, true);
+  document.addEventListener('workspace:transform', handler);
+  NodeBase.cardListenersAttached = true;
 };
 
 export default NodeBase;

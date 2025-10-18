@@ -19,3 +19,12 @@
 - Replaced the elements builder root with a fixed “Add Element” marble that launches a creation modal, spawns typed nodes, and drives connection-aware growth.
 - Generalised zoom/pan and canvas bootstrapping via `util.enableZoomPan` + `ensureCanvas`, then adopted the helpers across project, elements, and main modules.
 - Modules touched: `core/`, `modules/project/`, `modules/elements/`, `modules/main/`.
+
+## 2025-10-20 11:22 UTC
+- Files modified: `core/core.css`, `core/nodebase.js`, `core/util.js`, `modules/project/project.js`, `modules/elements/elements.js`, `modules/main/main.js`, `todo.md`.
+- Completed tasks:
+  - Added viewport focus helpers and initial transforms so each builder loads centered on its key nodes with a subtle animate-in.
+  - Overhauled card hosting to pin panels to the triggering node’s upper-right corner with smart flipping and live repositioning while zooming/panning; drag calculations now refresh the active scale on every move.
+  - Rebuilt the elements builder start state so the canvas is empty until the user creates an element; new nodes arrange in a centered grid and the viewport recenters on the first addition.
+  - Refined marble styling/contrast to stay legible at varied zoom levels.
+- Follow-ups: None noted.
