@@ -150,6 +150,8 @@ class LinkManager {
     this.links.set(id, link);
     nodeA.links.add(link);
     nodeB.links.add(link);
+    nodeA.onConnectionsChanged?.();
+    nodeB.onConnectionsChanged?.();
 
     this.updateLinkPosition(link);
   }
@@ -159,6 +161,8 @@ class LinkManager {
     if (!link) return;
     link.nodeA.links.delete(link);
     link.nodeB.links.delete(link);
+    link.nodeA.onConnectionsChanged?.();
+    link.nodeB.onConnectionsChanged?.();
     link.line.remove();
     link.handle.remove();
     if (link.card) {

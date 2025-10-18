@@ -62,7 +62,7 @@ const util = {
     },
   },
 
-  enableZoomPan(workspace, canvas) {
+  enableZoomPan(workspace, canvas, config = {}) {
     if (!workspace || !canvas) {
       throw new Error('Workspace and canvas elements are required for zoom/pan.');
     }
@@ -70,35 +70,67 @@ const util = {
     workspace.classList.add('workspace-ready');
     canvas.classList.add('canvas-ready');
 
+    const settings = {
+      minScale: config.minScale ?? 0.4,
+      maxScale: config.maxScale ?? 2.5,
+      initialScale: config.initialScale ?? 1,
+      centerOnLoad: config.centerOnLoad !== false,
+      initialTranslate: config.initialTranslate ?? null,
+      onTransform: typeof config.onTransform === 'function' ? config.onTransform : null,
+    };
+
     const state = {
-      scale: 1,
-      minScale: 0.4,
-      maxScale: 2.5,
-      translateX: 0,
-      translateY: 0,
+      scale: settings.initialScale,
+      minScale: settings.minScale,
+      maxScale: settings.maxScale,
+      translateX: settings.initialTranslate?.x ?? 0,
+      translateY: settings.initialTranslate?.y ?? 0,
       panning: false,
       pointerId: null,
       start: { x: 0, y: 0 },
       translateStart: { x: 0, y: 0 },
     };
 
-    const applyTransform = () => {
+    const notifyTransform = () => {
+      const detail = {
+        scale: state.scale,
+        translateX: state.translateX,
+        translateY: state.translateY,
+      };
+      settings.onTransform?.(detail);
+      workspace.dispatchEvent(
+        new CustomEvent('workspace:transform', {
+          detail,
+        })
+      );
+    };
+
+    const applyTransform = (notify = true) => {
       canvas.style.transform = `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`;
       canvas.dataset.scale = String(state.scale);
       canvas.dataset.translateX = String(state.translateX);
       canvas.dataset.translateY = String(state.translateY);
+      if (notify) {
+        notifyTransform();
+      }
     };
 
     const centerCanvas = () => {
       const workspaceRect = workspace.getBoundingClientRect();
-      const canvasRect = canvas.getBoundingClientRect();
-      state.translateX = (workspaceRect.width - canvasRect.width) / 2;
-      state.translateY = (workspaceRect.height - canvasRect.height) / 2;
+      const canvasWidth = canvas.offsetWidth * state.scale;
+      const canvasHeight = canvas.offsetHeight * state.scale;
+      state.translateX = (workspaceRect.width - canvasWidth) / 2;
+      state.translateY = (workspaceRect.height - canvasHeight) / 2;
       applyTransform();
     };
 
-    // Delay centering until the next frame so layout is calculated.
-    requestAnimationFrame(centerCanvas);
+    applyTransform(false);
+
+    if (settings.centerOnLoad) {
+      requestAnimationFrame(centerCanvas);
+    } else if (settings.initialTranslate) {
+      applyTransform();
+    }
 
     const onWheel = (event) => {
       event.preventDefault();
@@ -133,7 +165,7 @@ const util = {
       state.start.y = event.clientY;
       state.translateStart.x = state.translateX;
       state.translateStart.y = state.translateY;
-      workspace.setPointerCapture(event.pointerId);
+      workspace.setPointerCapture?.(event.pointerId);
     };
 
     const onPointerMove = (event) => {
@@ -152,6 +184,7 @@ const util = {
       if (workspace.hasPointerCapture?.(event.pointerId)) {
         workspace.releasePointerCapture(event.pointerId);
       }
+      applyTransform();
     };
 
     workspace.addEventListener('wheel', onWheel, { passive: false });
@@ -169,15 +202,77 @@ const util = {
       get translate() {
         return { x: state.translateX, y: state.translateY };
       },
-      reset() {
-        state.scale = 1;
-        state.translateX = 0;
-        state.translateY = 0;
+      setTransform({ scale, translateX, translateY, animate = true } = {}) {
+        if (typeof scale === 'number') {
+          state.scale = Math.min(state.maxScale, Math.max(state.minScale, scale));
+        }
+        if (typeof translateX === 'number') {
+          state.translateX = translateX;
+        }
+        if (typeof translateY === 'number') {
+          state.translateY = translateY;
+        }
+        if (!animate) {
+          canvas.classList.add('no-transition');
+        }
         applyTransform();
+        if (!animate) {
+          requestAnimationFrame(() => {
+            canvas.classList.remove('no-transition');
+          });
+        }
+      },
+      reset({ animate = true } = {}) {
+        state.scale = settings.initialScale;
+        state.translateX = settings.initialTranslate?.x ?? 0;
+        state.translateY = settings.initialTranslate?.y ?? 0;
+        if (settings.centerOnLoad && !settings.initialTranslate) {
+          centerCanvas();
+          return;
+        }
+        if (!animate) {
+          canvas.classList.add('no-transition');
+        }
+        applyTransform();
+        if (!animate) {
+          requestAnimationFrame(() => {
+            canvas.classList.remove('no-transition');
+          });
+        }
+      },
+      destroy() {
+        workspace.removeEventListener('wheel', onWheel);
+        workspace.removeEventListener('pointerdown', onPointerDown);
+        workspace.removeEventListener('pointermove', onPointerMove);
+        workspace.removeEventListener('pointerup', stopPan);
+        workspace.removeEventListener('pointercancel', stopPan);
       },
     };
+  },
+
+  ensureCanvas(workspace, options = {}) {
+    if (!workspace) {
+      throw new Error('Workspace element is required to ensure a canvas.');
+    }
+    const { id = 'canvas', width = 2400, height = 2400, classes = [] } = options;
+    let canvas = workspace.querySelector(`#${id}`);
+    if (!canvas) {
+      canvas = document.createElement('div');
+      canvas.id = id;
+      workspace.appendChild(canvas);
+    }
+    if (width) {
+      canvas.style.width = `${width}px`;
+    }
+    if (height) {
+      canvas.style.height = `${height}px`;
+    }
+    if (Array.isArray(classes)) {
+      classes.filter(Boolean).forEach((cls) => canvas.classList.add(cls));
+    }
+    return canvas;
   },
 };
 
 export default util;
-export const { log, fadeIn, fadeOut, polarToCartesian, randomColor, storage, enableZoomPan } = util;
+export const { log, fadeIn, fadeOut, polarToCartesian, randomColor, storage, enableZoomPan, ensureCanvas } = util;

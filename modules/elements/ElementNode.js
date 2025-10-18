@@ -43,9 +43,30 @@ class ElementNode extends NodeBase {
     this.links = new Set();
     const initialData = ElementNode.cloneData(options.data);
     this.data = this.ensureDataShape(initialData);
+  }
 
-    this.removeAddIcon();
-    this.injectLinkIcon();
+  getIconDefinitions() {
+    return [
+      { label: '📄', action: 'data', title: 'Open data panel' },
+      { label: '💬', action: 'discussion', title: 'Open discussion panel' },
+      { label: '🔗', action: 'link', title: 'Link this element to another' },
+      { label: '📝', action: 'text', title: 'Open full text editor' },
+    ];
+  }
+
+  getGrowthCount() {
+    return this.links?.size ?? 0;
+  }
+
+  getBadgeValue() {
+    return this.links?.size ?? 0;
+  }
+
+  getCardTitle(type) {
+    if (type === 'data') {
+      return `${this.title} — ${TYPE_CONFIG[this.type].label} Data`;
+    }
+    return super.getCardTitle(type);
   }
 
   static normaliseType(type) {
@@ -93,34 +114,6 @@ class ElementNode extends NodeBase {
   static attachLinkManager(manager) {
     ElementNode.linkManager = manager;
     NodeBase.setActiveLinkManager(manager);
-  }
-
-  removeAddIcon() {
-    const iconBar = this.element.querySelector('.node-icons');
-    const addButton = iconBar?.querySelector('[data-action="add"]');
-    if (addButton) {
-      addButton.remove();
-    }
-  }
-
-  injectLinkIcon() {
-    const iconBar = this.element.querySelector('.node-icons');
-    if (!iconBar) return;
-    const existing = iconBar.querySelector('[data-action="link"]');
-    if (existing) return;
-
-    const button = document.createElement('button');
-    button.className = 'node-icon';
-    button.type = 'button';
-    button.dataset.action = 'link';
-    button.title = 'Link this element to another';
-    button.textContent = '🔗';
-    button.addEventListener('click', (event) => {
-      event.stopPropagation();
-      this.handleIconAction('link');
-    });
-
-    iconBar.appendChild(button);
   }
 
   createDefaultData() {
@@ -216,7 +209,7 @@ class ElementNode extends NodeBase {
     const header = document.createElement('header');
     header.className = 'side-card__header';
     const title = document.createElement('h2');
-    title.textContent = `${this.title} — ${TYPE_CONFIG[this.type].label} Data`;
+    title.textContent = this.getCardTitle('data');
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'side-card__close';
@@ -578,6 +571,8 @@ ElementNode.typeRegistry = {
   character: CharacterNode,
   place: PlaceNode,
   setting: PlaceNode,
+  item: OtherNode,
+  theme: OtherNode,
   other: OtherNode,
 };
 

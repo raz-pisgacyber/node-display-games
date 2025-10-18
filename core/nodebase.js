@@ -15,7 +15,7 @@ const ensurePanelHost = () => {
 };
 
 class NodeBase {
-  constructor(options) {
+  constructor(options = {}) {
     const {
       canvas,
       title = 'Untitled',
@@ -26,6 +26,7 @@ class NodeBase {
       childOrbit = 220,
       parent = null,
       id = null,
+      draggable = true,
     } = options;
 
     if (!canvas) {
@@ -36,6 +37,9 @@ class NodeBase {
     this.parent = parent;
     this.title = title;
     this.radius = radius;
+    this.baseRadius = radius;
+    this.baseSize = radius * 2;
+    this.growthFactor = 1;
     this.color = color;
     this.childOrbit = childOrbit;
     this.children = [];
@@ -46,6 +50,10 @@ class NodeBase {
     this.cards = {};
     this.manualPosition = false;
     this.id = id || `node-${++nodeIdCounter}`;
+    this.draggable = draggable !== false;
+    this.fullText = options?.fullText ?? '';
+    this.notes = options?.notes ?? '';
+    this.discussion = options?.discussion ?? '';
 
     /** ✅ PATCH: Ensure every node has a link set for LinkManager */
     this.links = new Set();
@@ -59,6 +67,10 @@ class NodeBase {
       fadeIn(this.element);
     });
 
+    this.updateGrowth();
+    this.updateBadge();
+    this.updateToggleState();
+
     util.log('Node created', this.id, this.title);
   }
 
@@ -69,35 +81,46 @@ class NodeBase {
 
     const iconBar = document.createElement('div');
     iconBar.className = 'node-icons';
+    this.iconBar = iconBar;
 
-    const createIconButton = (label, action, title) => {
-      const button = document.createElement('button');
-      button.className = 'node-icon';
-      button.dataset.action = action;
-      button.type = 'button';
-      button.title = title;
-      button.textContent = label;
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        NodeBase.setLastInteractedNode?.(this);
-        this.handleIconAction(action);
-      });
-      return button;
-    };
+    this.getIconDefinitions().forEach((icon) => {
+      const button = this.createIconButton(icon);
+      if (button) {
+        iconBar.appendChild(button);
+      }
+    });
 
-    iconBar.appendChild(createIconButton('📄', 'data', 'Open data panel'));
-    iconBar.appendChild(createIconButton('💬', 'discussion', 'Open discussion panel'));
-    iconBar.appendChild(createIconButton('➕', 'add', 'Add child node'));
+    const toggle = document.createElement('button');
+    toggle.className = 'node-toggle';
+    toggle.type = 'button';
+    toggle.title = 'Expand or collapse children';
+    toggle.textContent = '▾';
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      NodeBase.setLastInteractedNode?.(this);
+      this.toggleChildren();
+    });
+    iconBar.appendChild(toggle);
+    this.toggleButton = toggle;
 
     const marble = document.createElement('div');
     marble.className = 'node-marble';
-    marble.style.background = this.color;
+    marble.style.setProperty('--node-color', this.color);
+    marble.style.setProperty('--node-size', `${this.baseSize}px`);
+    this.marbleElement = marble;
 
     const titleEl = document.createElement('div');
     titleEl.className = 'node-title';
     titleEl.textContent = this.title;
+    this.titleElement = titleEl;
 
     marble.appendChild(titleEl);
+
+    const badge = document.createElement('span');
+    badge.className = 'node-marble__badge';
+    badge.style.display = 'none';
+    marble.appendChild(badge);
+    this.badgeElement = badge;
 
     node.appendChild(iconBar);
     node.appendChild(marble);
@@ -108,6 +131,89 @@ class NodeBase {
     marble.addEventListener('pointercancel', (event) => this.onPointerCancel(event));
 
     return node;
+  }
+
+  getIconDefinitions() {
+    return [
+      { label: '📄', action: 'data', title: 'Open data panel' },
+      { label: '💬', action: 'discussion', title: 'Open discussion panel' },
+      { label: '➕', action: 'add', title: 'Add child node' },
+      { label: '📝', action: 'text', title: 'Open full text editor' },
+    ];
+  }
+
+  createIconButton(icon) {
+    const { label, action, title, className } = icon;
+    if (!label || !action) {
+      return null;
+    }
+    const button = document.createElement('button');
+    button.className = className ? `node-icon ${className}` : 'node-icon';
+    button.dataset.action = action;
+    button.type = 'button';
+    if (title) {
+      button.title = title;
+    }
+    button.textContent = label;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      NodeBase.setLastInteractedNode?.(this);
+      this.handleIconAction(action);
+    });
+    return button;
+  }
+
+  getGrowthCount() {
+    return this.children.length;
+  }
+
+  getBadgeValue() {
+    return this.getGrowthCount();
+  }
+
+  updateGrowth() {
+    if (!this.marbleElement) {
+      return;
+    }
+    const count = Math.max(0, this.getGrowthCount());
+    const factor = 1 + count * 0.1;
+    this.growthFactor = factor;
+    const size = this.baseSize * factor;
+    this.marbleElement.style.setProperty('--node-size', `${size}px`);
+  }
+
+  updateBadge() {
+    if (!this.badgeElement) {
+      return;
+    }
+    const value = this.getBadgeValue();
+    if (value > 0) {
+      this.badgeElement.textContent = value;
+      this.badgeElement.style.display = '';
+    } else {
+      this.badgeElement.textContent = '';
+      this.badgeElement.style.display = 'none';
+    }
+  }
+
+  updateToggleState() {
+    if (!this.toggleButton) {
+      return;
+    }
+    const hasChildren = this.children.length > 0;
+    this.toggleButton.disabled = !hasChildren;
+    this.toggleButton.style.visibility = hasChildren ? 'visible' : 'hidden';
+  }
+
+  onChildrenChanged() {
+    this.updateGrowth();
+    this.updateBadge();
+    this.updateToggleState();
+  }
+
+  onConnectionsChanged() {
+    this.updateGrowth();
+    this.updateBadge();
   }
 
   setPosition(x, y, animate = true) {
@@ -121,6 +227,7 @@ class NodeBase {
         this.element.classList.remove('no-transition');
       });
     }
+    NodeBase.activeLinkManager?.updateLinksForNode?.(this);
   }
 
   getCanvasScale() {
@@ -222,9 +329,11 @@ class NodeBase {
       return;
     }
 
-    this.dragging = true;
     this.pointerSession = session;
-    this.element.classList.add('dragging');
+    if (this.draggable) {
+      this.dragging = true;
+      this.element.classList.add('dragging');
+    }
   }
 
   onPointerMove(event) {
@@ -257,7 +366,6 @@ class NodeBase {
 
   toggleChildren() {
     if (!this.children.length) {
-      this.handleIconAction('add');
       return;
     }
     this.expanded ? this.collapseChildren() : this.expandChildren();
@@ -268,6 +376,8 @@ class NodeBase {
     this.expanded = true;
     this.element.classList.add('expanded');
     this.layoutChildren();
+    this.children.forEach((child) => child.show());
+    this.updateToggleState();
   }
 
   collapseChildren() {
@@ -277,6 +387,7 @@ class NodeBase {
       child.hide();
       child.collapseChildren();
     });
+    this.updateToggleState();
   }
 
   layoutChildren() {
@@ -306,9 +417,13 @@ class NodeBase {
       child.parent = this;
     }
     child.manualPosition = false;
-    child.hide();
     this.children.push(child);
+    if (!this.expanded) {
+      child.hide();
+    }
+    this.onChildrenChanged();
     if (this.expanded) {
+      child.show();
       this.layoutChildren();
     }
     return child;
@@ -327,10 +442,12 @@ class NodeBase {
 
   show() {
     fadeIn(this.element);
+    NodeBase.activeLinkManager?.updateLinksForNode?.(this);
   }
 
   hide() {
     fadeOut(this.element);
+    NodeBase.activeLinkManager?.updateLinksForNode?.(this);
   }
 
   handleIconAction(action) {
@@ -343,6 +460,12 @@ class NodeBase {
         break;
       case 'add':
         this.onAddChild();
+        break;
+      case 'text':
+        this.toggleCard('text');
+        break;
+      case 'toggle':
+        this.toggleChildren();
         break;
       default:
         break;
@@ -383,7 +506,7 @@ class NodeBase {
     const header = document.createElement('header');
     header.className = 'side-card__header';
     const title = document.createElement('h2');
-    title.textContent = `${this.title} — ${type === 'data' ? 'Data' : 'Discussion'}`;
+    title.textContent = this.getCardTitle(type);
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'side-card__close';
@@ -408,7 +531,7 @@ class NodeBase {
       nameInput.value = this.title;
       nameInput.addEventListener('input', (event) => {
         this.setTitle(event.target.value);
-        header.querySelector('h2').textContent = `${this.title} — Data`;
+        header.querySelector('h2').textContent = this.getCardTitle('data');
       });
 
       const notesLabel = document.createElement('label');
@@ -424,7 +547,7 @@ class NodeBase {
       content.appendChild(nameInput);
       content.appendChild(notesLabel);
       content.appendChild(notesArea);
-    } else {
+    } else if (type === 'discussion') {
       const discussionArea = document.createElement('textarea');
       discussionArea.placeholder = 'Collaborate and leave feedback...';
       discussionArea.value = this.discussion || '';
@@ -432,6 +555,21 @@ class NodeBase {
         this.discussion = event.target.value;
       });
       content.appendChild(discussionArea);
+    } else if (type === 'text') {
+      const intro = document.createElement('p');
+      intro.textContent = 'Draft the full chapter, scene, or moment here. Changes are saved automatically.';
+      intro.style.fontSize = '13px';
+      intro.style.color = 'var(--muted)';
+      content.appendChild(intro);
+
+      const textArea = document.createElement('textarea');
+      textArea.placeholder = 'Write your narrative flow, beats, and detailed prose...';
+      textArea.value = this.fullText || '';
+      textArea.rows = 12;
+      textArea.addEventListener('input', (event) => {
+        this.fullText = event.target.value;
+      });
+      content.appendChild(textArea);
     }
 
     card.appendChild(content);
@@ -446,6 +584,31 @@ class NodeBase {
     if (titleEl) {
       titleEl.textContent = this.title;
     }
+    this.refreshCardHeaders();
+    NodeBase.activeLinkManager?.updateLinkTitlesForNode?.(this);
+  }
+
+  getCardTitle(type) {
+    switch (type) {
+      case 'data':
+        return `${this.title} — Data`;
+      case 'discussion':
+        return `${this.title} — Discussion`;
+      case 'text':
+        return `${this.title} — Full Text`;
+      default:
+        return this.title;
+    }
+  }
+
+  refreshCardHeaders() {
+    Object.entries(this.cards).forEach(([type, card]) => {
+      if (!card) return;
+      const heading = card.querySelector('h2');
+      if (heading) {
+        heading.textContent = this.getCardTitle(type);
+      }
+    });
   }
 
   static hideOpenCard() {

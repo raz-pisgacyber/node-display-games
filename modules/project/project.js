@@ -1,5 +1,5 @@
 import ProjectNode from './ProjectNode.js';
-import util, { enableZoomPan, log } from '../../core/util.js';
+import util, { enableZoomPan, ensureCanvas, log } from '../../core/util.js';
 
 const init = () => {
   const workspace = document.getElementById('workspace');
@@ -8,27 +8,25 @@ const init = () => {
     return;
   }
 
-  let canvas = workspace.querySelector('#canvas');
-  if (!canvas) {
-    canvas = document.createElement('div');
-    canvas.id = 'canvas';
-    workspace.appendChild(canvas);
-  }
+  const canvas = ensureCanvas(workspace, { width: 2400, height: 2400 });
 
   const { clientWidth, clientHeight } = workspace;
   const centerX = clientWidth / 2;
-  const centerY = clientHeight / 2;
+  const centerY = Math.max(180, clientHeight * 0.25);
 
   const rootNode = new ProjectNode({ canvas, x: centerX, y: centerY });
-  rootNode.expandChildren();
 
-  enableZoomPan(workspace, canvas);
+  const viewport = enableZoomPan(workspace, canvas, {
+    minScale: 0.5,
+    maxScale: 2.4,
+  });
 
   log('Project builder initialised.');
 
   window.builder = {
     util,
     rootNode,
+    viewport,
   };
 };
 

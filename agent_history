@@ -12,3 +12,10 @@
 - Replaced the per-node ➕ control in the elements builder with a toolbar-level "Add Element" action that targets the most recently interacted element node.
 - Added styling for the new toolbar button and taught `NodeBase` to remember the last interacted node so global actions attach to the expected parent.
 - Cleared the completed todo entry to reflect that no outstanding tasks remain.
+
+## 2025-10-19
+- Refactored `NodeBase` UI: added dedicated expand toggles, full-text panels, growth badges, and upgraded marble styling with mock-glass gradients shared across modules.
+- Reworked the project builder to drop canned child nodes, position descendants in an auto-pyramidal layout, and keep the root staged near the top of the workspace.
+- Replaced the elements builder root with a fixed “Add Element” marble that launches a creation modal, spawns typed nodes, and drives connection-aware growth.
+- Generalised zoom/pan and canvas bootstrapping via `util.enableZoomPan` + `ensureCanvas`, then adopted the helpers across project, elements, and main modules.
+- Modules touched: `core/`, `modules/project/`, `modules/elements/`, `modules/main/`.
