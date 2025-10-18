@@ -164,6 +164,7 @@ body {
 .node-icons {
   display: flex;
   gap: 6px;
+  align-items: center;
   opacity: 0;
   transform: translateY(-6px);
   transition: opacity var(--transition-fast), transform var(--transition-fast);
@@ -175,7 +176,8 @@ body {
   transform: translateY(0);
 }
 
-.node-icon {
+.node-icon,
+.node-toggle {
   appearance: none;
   background: rgba(22, 22, 42, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -190,13 +192,23 @@ body {
   transition: transform var(--transition-fast), background var(--transition-fast);
 }
 
-.node-icon:hover {
+.node-icon:hover,
+.node-toggle:hover {
   transform: translateY(-2px) scale(1.05);
   background: rgba(108, 92, 231, 0.7);
 }
 
 .link-node .node-icons {
   display: none;
+}
+
+.node-toggle {
+  font-size: 18px;
+  transform: rotate(0deg);
+}
+
+.node.expanded .node-toggle {
+  transform: rotate(180deg);
 }
 
 .link-node .node-marble {
@@ -223,8 +235,9 @@ body {
 }
 
 .node-marble {
-  width: 120px;
-  height: 120px;
+  position: relative;
+  width: var(--node-size, 120px);
+  height: var(--node-size, 120px);
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -233,8 +246,27 @@ body {
   text-align: center;
   padding: 20px;
   cursor: pointer;
-  box-shadow: var(--node-shadow);
-  transition: transform var(--transition-medium), box-shadow var(--transition-medium);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45), inset 0 10px 25px rgba(255, 255, 255, 0.2),
+    inset 0 -14px 25px rgba(0, 0, 0, 0.4);
+  background: radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.8) 0, rgba(255, 255, 255, 0.05) 32%, transparent 60%),
+    radial-gradient(circle at 70% 75%, rgba(255, 255, 255, 0.1) 0, rgba(255, 255, 255, 0) 40%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.4), rgba(0, 0, 0, 0.4)),
+    var(--node-color, rgba(108, 92, 231, 0.8));
+  background-blend-mode: screen, normal, soft-light, normal;
+  transition: transform var(--transition-medium), box-shadow var(--transition-medium),
+    background var(--transition-medium);
+}
+
+.node-marble::after {
+  content: '';
+  position: absolute;
+  inset: 18% 18% auto 18%;
+  height: 28%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 10%, rgba(255, 255, 255, 0.7) 0, rgba(255, 255, 255, 0) 70%);
+  pointer-events: none;
+  opacity: 0.9;
+  transform: translateY(-10%) scale(1.02);
 }
 
 .node-linking .node-marble {
@@ -244,13 +276,32 @@ body {
 .node.expanded .node-marble,
 .node:hover .node-marble {
   transform: scale(1.04);
-  box-shadow: 0 24px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 26px 60px rgba(0, 0, 0, 0.6), inset 0 16px 30px rgba(255, 255, 255, 0.3),
+    inset 0 -20px 38px rgba(0, 0, 0, 0.5);
 }
 
 .node.dragging .node-marble {
   transform: scale(1.08);
   box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
   cursor: grabbing;
+}
+
+.node-marble__badge {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(11, 11, 19, 0.45);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 4px 8px rgba(255, 255, 255, 0.12);
 }
 
 .node-title {
@@ -560,4 +611,103 @@ body {
 .element-data-card__remove-field:hover {
   background: rgba(255, 77, 109, 0.28);
   transform: translateY(-1px);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 12, 0.85);
+  display: grid;
+  place-items: center;
+  backdrop-filter: blur(8px);
+  z-index: 40;
+}
+
+.modal-card {
+  width: min(420px, 90vw);
+  background: var(--bg-elevated);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: 0 35px 60px rgba(0, 0, 0, 0.45);
+  animation: modal-pop 180ms ease;
+}
+
+.modal-card h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.04em;
+}
+
+.modal-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-card label {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.modal-card input,
+.modal-card select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.modal-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modal-card__button {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.modal-card__button:hover {
+  background: rgba(108, 92, 231, 0.55);
+  transform: translateY(-1px);
+}
+
+.modal-card__button--primary {
+  background: linear-gradient(120deg, rgba(108, 92, 231, 0.9), rgba(0, 206, 201, 0.75));
+  border-color: rgba(108, 92, 231, 0.4);
+}
+
+.modal-card__button--primary:hover {
+  background: linear-gradient(120deg, rgba(108, 92, 231, 1), rgba(0, 206, 201, 0.9));
+}
+
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }

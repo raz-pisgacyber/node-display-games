@@ -1,5 +1,5 @@
 import NodeBase from '../../core/nodebase.js';
-import util, { enableZoomPan } from '../../core/util.js';
+import util, { enableZoomPan, ensureCanvas } from '../../core/util.js';
 
 class LinkNode extends NodeBase {
   constructor(options) {
@@ -38,14 +38,12 @@ const init = () => {
     return;
   }
 
-  let canvas = workspace.querySelector('#canvas');
-  if (!canvas) {
-    canvas = document.createElement('div');
-    canvas.id = 'canvas';
-    workspace.appendChild(canvas);
-  }
+  const canvas = ensureCanvas(workspace, { width: 2200, height: 1600 });
 
-  enableZoomPan(workspace, canvas);
+  enableZoomPan(workspace, canvas, {
+    minScale: 0.6,
+    maxScale: 2.2,
+  });
 
   const { clientWidth, clientHeight } = workspace;
   const centerX = clientWidth / 2;
