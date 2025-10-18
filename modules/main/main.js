@@ -40,19 +40,19 @@ const init = () => {
 
   const canvas = ensureCanvas(workspace, { width: 2200, height: 1600 });
 
-  enableZoomPan(workspace, canvas, {
+  const canvasCenterX = canvas.offsetWidth / 2;
+  const canvasCenterY = canvas.offsetHeight / 2;
+
+  const viewport = enableZoomPan(workspace, canvas, {
     minScale: 0.6,
     maxScale: 2.2,
+    centerOnLoad: false,
   });
-
-  const { clientWidth, clientHeight } = workspace;
-  const centerX = clientWidth / 2;
-  const centerY = clientHeight / 2;
 
   new LinkNode({
     canvas,
-    x: centerX - 180,
-    y: centerY,
+    x: canvasCenterX - 220,
+    y: canvasCenterY,
     title: 'Project Builder',
     color: '#6C5CE7',
     url: '../project/project.html',
@@ -60,11 +60,15 @@ const init = () => {
 
   new LinkNode({
     canvas,
-    x: centerX + 180,
-    y: centerY,
+    x: canvasCenterX + 220,
+    y: canvasCenterY,
     title: 'Elements Builder',
     color: '#00CEC9',
     url: '../elements/elements.html',
+  });
+
+  requestAnimationFrame(() => {
+    viewport.focusOn({ x: canvasCenterX, y: canvasCenterY }, { scale: 0.9 });
   });
 
   util.log('Main hub initialised.');

@@ -3,89 +3,6 @@ import util, { enableZoomPan, ensureCanvas } from '../../core/util.js';
 import { ElementNode, CharacterNode, PlaceNode, OtherNode } from './ElementNode.js';
 import LinkManager from './LinkManager.js';
 
-class AddElementNode extends NodeBase {
-  constructor(options = {}) {
-    super({
-      title: options.title ?? 'Add Element',
-      color: options.color ?? '#a29bfe',
-      radius: 90,
-      childOrbit: options.childOrbit ?? 280,
-      draggable: false,
-      ...options,
-    });
-
-    this.onRequestAdd = options.onRequestAdd;
-    this.element.classList.add('add-element-node');
-    this.element.classList.add('expanded');
-    this.expanded = true;
-    if (this.iconBar) {
-      this.iconBar.remove();
-      this.iconBar = null;
-    }
-    if (this.toggleButton) {
-      this.toggleButton.remove();
-      this.toggleButton = null;
-    }
-    if (this.badgeElement) {
-      this.badgeElement.style.display = 'none';
-    }
-    if (this.titleElement) {
-      this.titleElement.textContent = '➕ Add Element';
-    }
-  }
-
-  getIconDefinitions() {
-    return [];
-  }
-
-  toggleChildren() {
-    if (typeof this.onRequestAdd === 'function') {
-      this.onRequestAdd(this);
-    }
-  }
-
-  onAddChild() {
-    this.toggleChildren();
-  }
-
-  layoutChildren() {
-    if (!this.children.length) {
-      return;
-    }
-    const perRow = 4;
-    const spacingX = this.childOrbit * 0.9;
-    const spacingY = this.childOrbit * 0.75;
-    this.children.forEach((child, index) => {
-      child.show();
-      if (child.manualPosition) {
-        return;
-      }
-      const row = Math.floor(index / perRow);
-      const rowStartIndex = row * perRow;
-      const itemsInRow = Math.min(perRow, this.children.length - rowStartIndex);
-      const indexInRow = index - rowStartIndex;
-      const offsetX = (indexInRow - (itemsInRow - 1) / 2) * spacingX;
-      const offsetY = (row + 1) * spacingY;
-      child.setPosition(this.position.x + offsetX, this.position.y + offsetY);
-    });
-  }
-
-  spawnElementNode({ title, type }) {
-    const normalizedType = ElementNode.normaliseType(type);
-    const element = ElementNode.createNode(normalizedType, {
-      canvas: this.canvas,
-      parent: this,
-      title,
-      x: this.position.x,
-      y: this.position.y + this.childOrbit,
-    });
-    const added = super.addChild(element);
-    this.expandChildren();
-    element.manualPosition = false;
-    return added;
-  }
-}
-
 const createElementModal = ({ onSubmit, onClose } = {}) => {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -204,15 +121,60 @@ const init = () => {
 
   const canvas = ensureCanvas(workspace, { width: 2800, height: 2200 });
 
-  const { clientWidth, clientHeight } = workspace;
-  const centerX = clientWidth / 2;
-  const centerY = Math.max(220, clientHeight * 0.22);
+  const layout = {
+    centerX: canvas.offsetWidth / 2,
+    centerY: Math.max(260, canvas.offsetHeight * 0.28),
+    spacingX: 320,
+    spacingY: 260,
+    perRow: 4,
+  };
+
+  const elementNodes = [];
+
+  const layoutNodes = () => {
+    elementNodes.forEach((node, index) => {
+      if (node.manualPosition) {
+        return;
+      }
+      const row = Math.floor(index / layout.perRow);
+      const rowStart = row * layout.perRow;
+      const itemsInRow = Math.min(layout.perRow, elementNodes.length - rowStart);
+      const indexInRow = index - rowStart;
+      const offsetX = (indexInRow - (itemsInRow - 1) / 2) * layout.spacingX;
+      const offsetY = row * layout.spacingY;
+      node.setPosition(layout.centerX + offsetX, layout.centerY + offsetY);
+    });
+  };
 
   const linkManager = new LinkManager(canvas);
   ElementNode.attachLinkManager(linkManager);
 
   let activeModal = null;
-  let addNode;
+  let viewport;
+
+  const createElementNode = ({ name, type }) => {
+    const normalizedType = ElementNode.normaliseType(type);
+    const node = ElementNode.createNode(normalizedType, {
+      canvas,
+      title: name,
+      x: layout.centerX,
+      y: layout.centerY,
+    });
+    node.manualPosition = false;
+    elementNodes.push(node);
+    layoutNodes();
+    NodeBase.setLastInteractedNode(node);
+    if (elementNodes.length === 1 && viewport) {
+      viewport.focusOn(
+        { x: node.position.x, y: node.position.y },
+        {
+          scale: 0.88,
+          offset: { x: 0, y: -Math.max(120, workspace.clientHeight * 0.16) },
+        }
+      );
+    }
+    return node;
+  };
 
   const openCreationModal = () => {
     if (activeModal) {
@@ -220,10 +182,7 @@ const init = () => {
     }
     activeModal = createElementModal({
       onSubmit: ({ name, type }) => {
-        if (!addNode) {
-          return;
-        }
-        const node = addNode.spawnElementNode({ title: name, type });
+        const node = createElementNode({ name, type });
         NodeBase.setLastInteractedNode(node);
       },
       onClose: () => {
@@ -232,30 +191,31 @@ const init = () => {
     });
   };
 
-  addNode = new AddElementNode({
-    canvas,
-    x: centerX,
-    y: centerY,
-    onRequestAdd: openCreationModal,
-  });
-
-  NodeBase.setLastInteractedNode(addNode);
-
   const addButton = document.getElementById('add-element');
   if (addButton) {
     addButton.addEventListener('click', openCreationModal);
   }
 
-  const viewport = enableZoomPan(workspace, canvas, {
+  viewport = enableZoomPan(workspace, canvas, {
     minScale: 0.5,
     maxScale: 2.6,
+    centerOnLoad: false,
+  });
+
+  requestAnimationFrame(() => {
+    viewport.focusOn(
+      { x: layout.centerX, y: layout.centerY },
+      {
+        scale: 0.92,
+        offset: { x: 0, y: -Math.max(100, workspace.clientHeight * 0.14) },
+      }
+    );
   });
 
   util.log('Elements builder initialised.');
 
   window.builder = {
     util,
-    addNode,
     ElementNode,
     CharacterNode,
     PlaceNode,
@@ -263,6 +223,9 @@ const init = () => {
     LinkManager,
     linkManager,
     viewport,
+    elementNodes,
+    createElementNode,
+    layoutNodes,
   };
 };
 
