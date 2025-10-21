@@ -6,6 +6,13 @@
   "scripts": {
     "start": "node server.js"
   },
+  "dependencies": {
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
+    "mysql2": "^3.9.3",
+    "neo4j-driver": "^5.20.0",
+    "uuid": "^9.0.1"
+  },
   "author": "",
   "license": "MIT"
 }
