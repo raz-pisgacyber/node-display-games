@@ -1,66 +1,42 @@
-const http = require('http');
-const fs = require('fs');
 const path = require('path');
+const express = require('express');
+const morgan = require('morgan');
 
-const PORT = process.env.PORT || 8080;
-const BASE_DIR = __dirname;
+const config = require('./src/config');
+const apiRouter = require('./src/routes/api');
+const { closeNeo4j } = require('./src/db/neo4j');
+const { closeMysql } = require('./src/db/mysql');
 
-const MIME_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.txt': 'text/plain; charset=utf-8'
-};
+const app = express();
 
-function getFilePath(urlPath) {
-  const decodedPath = decodeURIComponent(urlPath.split('?')[0]);
-  const safePath = path.normalize(decodedPath).replace(/^([/\\]?\.\.(?:[/\\]|$))+/, '');
-  if (safePath === '/' || safePath === '') {
-    return path.join(BASE_DIR, 'modules', 'main', 'index.html');
-  }
-  return path.join(BASE_DIR, safePath);
-}
+app.use(morgan('dev'));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-function serveFile(filePath, res) {
-  fs.stat(filePath, (statErr, stats) => {
-    if (statErr) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('404 Not Found');
-      return;
-    }
+app.use('/modules', express.static(path.join(__dirname, 'modules')));
+app.use('/core', express.static(path.join(__dirname, 'core')));
 
-    let resolvedPath = filePath;
-    if (stats.isDirectory()) {
-      resolvedPath = path.join(filePath, 'index.html');
-    }
+app.use('/api', apiRouter);
 
-    fs.readFile(resolvedPath, (readErr, data) => {
-      if (readErr) {
-        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('500 Internal Server Error');
-        return;
-      }
-
-      const ext = path.extname(resolvedPath);
-      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(data);
-    });
-  });
-}
-
-const server = http.createServer((req, res) => {
-  const filePath = getFilePath(req.url);
-  serveFile(filePath, res);
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'modules', 'main', 'index.html'));
 });
 
-server.listen(PORT, () => {
-  console.log(`Static server running at http://localhost:${PORT}/`);
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'Internal Server Error', detail: err.message });
 });
+
+const server = app.listen(config.port, () => {
+  console.log(`Server listening at http://localhost:${config.port}`);
+});
+
+async function shutdown() {
+  await Promise.allSettled([closeNeo4j(), closeMysql()]);
+  server.close(() => process.exit(0));
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+module.exports = app;
