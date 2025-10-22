@@ -9,6 +9,16 @@ const driver = neo4j.driver(
   }
 );
 
+async function verifyNeo4jConnection() {
+  const connectivity = await driver.verifyConnectivity();
+  const resolvedAddress = connectivity?.address?.asHostPort?.() || connectivity?.address;
+  const addressLabel =
+    typeof resolvedAddress === 'string'
+      ? resolvedAddress
+      : `${config.neo4j.uri} (resolved)`;
+  console.log(`Connected to Neo4j at ${addressLabel}`);
+}
+
 async function closeNeo4j() {
   await driver.close();
 }
@@ -16,4 +26,5 @@ async function closeNeo4j() {
 module.exports = {
   driver,
   closeNeo4j,
+  verifyNeo4jConnection,
 };

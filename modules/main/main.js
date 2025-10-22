@@ -1,20 +1,48 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'https://esm.sh/react@18?dev';
-import { createRoot } from 'https://esm.sh/react-dom@18/client?dev';
-import ReactFlow, {
-  MiniMap,
-  Controls,
-  Background,
-  useNodesState,
-  useEdgesState,
-  addEdge,
-} from 'https://esm.sh/reactflow@11?deps=react@18,react-dom@18&dev';
-
 const AUTOSAVE_DELAY = 1600;
 const DEFAULT_VERSION_INTERVAL = 6000;
 const API_BASE = '/api';
 const PROJECT_STORAGE_KEY = 'story-graph-project';
 const SESSION_STORAGE_PREFIX = 'story-graph-session:';
 const USER_ID_STORAGE_KEY = 'story-graph-user-id';
+
+const state = {
+  appConfig: {},
+  configError: null,
+  projectId: null,
+  session: null,
+  sessionError: null,
+  graphNodes: [],
+  graphEdges: [],
+  selectedNodeId: null,
+  draftNode: null,
+  autosaveState: 'idle',
+  isDirty: false,
+  errorBanner: null,
+  messages: [],
+  messagesStatus: 'idle',
+  newMessage: '',
+  summary: null,
+  summaryDraft: '',
+  checkpoints: [],
+  checkpointName: '',
+  newMetaKey: '',
+  newMetaValue: '',
+  newEdgeTarget: '',
+  newEdgeType: 'LINKS_TO',
+  newEdgeDirection: 'outgoing',
+  versionCursor: null,
+};
+
+const runtime = {
+  autosaveTimer: null,
+  versionInterval: null,
+  seededPositions: new Set(),
+  nodeElements: new Map(),
+  edgeElements: [],
+  dragging: null,
+};
+
+const ui = {};
 
 function stableStringify(value) {
   if (Array.isArray(value)) {
@@ -25,6 +53,10 @@ function stableStringify(value) {
     return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function deepEqual(a, b) {
+  return stableStringify(a) === stableStringify(b);
 }
 
 async function fetchJSON(url, options = {}) {
@@ -112,10 +144,6 @@ function formatDate(value) {
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
-function deepEqual(a, b) {
-  return stableStringify(a) === stableStringify(b);
-}
-
 function parseMetaValue(input) {
   const trimmed = input.trim();
   if (trimmed === '') return '';
@@ -136,844 +164,1367 @@ function stringifyMetaValue(value) {
   return JSON.stringify(value);
 }
 
-function App() {
-  const [appConfig, setAppConfig] = useState(null);
-  const [configError, setConfigError] = useState(null);
-  const [projectId, setProjectId] = useState(null);
-  const [session, setSession] = useState(null);
-  const [sessionError, setSessionError] = useState(null);
-  const [graphNodes, setGraphNodes] = useState([]);
-  const [graphEdges, setGraphEdges] = useState([]);
-  const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [selectedNodeId, setSelectedNodeId] = useState(null);
-  const [draftNode, setDraftNode] = useState(null);
-  const [autosaveState, setAutosaveState] = useState('idle');
-  const [isDirty, setIsDirty] = useState(false);
-  const autosaveHandle = useRef(null);
-  const versionCursor = useRef(null);
-  const [messages, setMessages] = useState([]);
-  const [messagesStatus, setMessagesStatus] = useState('idle');
-  const [newMessage, setNewMessage] = useState('');
-  const [summary, setSummary] = useState(null);
-  const [summaryDraft, setSummaryDraft] = useState('');
-  const [checkpoints, setCheckpoints] = useState([]);
-  const [checkpointName, setCheckpointName] = useState('');
-  const [newMetaKey, setNewMetaKey] = useState('');
-  const [newMetaValue, setNewMetaValue] = useState('');
-  const [errorBanner, setErrorBanner] = useState(null);
-  const initialisedPositions = useRef(new Set());
+function cloneNode(node) {
+  return {
+    ...node,
+    meta: node.meta ? JSON.parse(JSON.stringify(node.meta)) : {},
+  };
+}
 
-  const selectedNode = useMemo(
-    () => graphNodes.find((node) => node.id === selectedNodeId) || null,
-    [graphNodes, selectedNodeId]
-  );
+function setErrorBanner(message) {
+  state.errorBanner = message;
+  renderErrorBanner();
+}
 
-  useEffect(() => {
-    if (!projectId) return;
-    initialisedPositions.current = new Set();
-    setGraphNodes([]);
-    setGraphEdges([]);
-    setNodes([]);
-    setEdges([]);
-    setSelectedNodeId(null);
-    setDraftNode(null);
-    setMessages([]);
-    setNewMessage('');
-    setSummary(null);
-    setSummaryDraft('');
-    setCheckpoints([]);
-    setAutosaveState('idle');
-    setIsDirty(false);
-    setErrorBanner(null);
-    versionCursor.current = null;
-  }, [projectId, setNodes, setEdges]);
+function clearErrorBanner() {
+  if (state.errorBanner) {
+    state.errorBanner = null;
+    renderErrorBanner();
+  }
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchJSON(`${API_BASE}/config`)
-      .then((data) => {
-        if (!cancelled) {
-          setAppConfig(data || {});
-          setConfigError(null);
-        }
-      })
-      .catch((err) => {
-        console.error(err);
-        if (!cancelled) {
-          setAppConfig({});
-          setConfigError(err.message);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+function updateAutosaveState(status) {
+  state.autosaveState = status;
+  renderStatus();
+}
 
-  useEffect(() => {
-    if (!appConfig) return;
-    const derivedProjectId = determineProjectId(appConfig);
-    setProjectId(derivedProjectId);
-  }, [appConfig]);
+function getStatusLabel() {
+  switch (state.autosaveState) {
+    case 'saving':
+      return 'Saving…';
+    case 'saved':
+      return 'Saved';
+    case 'error':
+      return 'Autosave failed';
+    case 'idle':
+      return 'Idle';
+    case 'dirty':
+      return 'Editing…';
+    default:
+      return 'Idle';
+  }
+}
 
-  useEffect(() => {
-    if (!projectId) return undefined;
-    let mounted = true;
-    setSession(null);
-    setSessionError(null);
-    getOrCreateSession(projectId)
-      .then((data) => {
-        if (mounted) setSession(data);
-      })
-      .catch((err) => {
-        console.error(err);
-        if (mounted) setSessionError(err.message);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [projectId]);
+function renderStatus() {
+  if (!ui.statusDot || !ui.statusLabel) return;
+  ui.statusDot.className = `status-dot ${state.autosaveState}`;
+  ui.statusLabel.textContent = getStatusLabel();
+}
 
-  const loadGraph = useCallback(async () => {
-    if (!projectId) return;
-    try {
-      const params = new URLSearchParams({ project_id: projectId });
-      const data = await fetchJSON(`${API_BASE}/graph?${params.toString()}`);
-      setGraphNodes(data.nodes || []);
-      setGraphEdges(data.edges || []);
-      versionCursor.current = new Date().toISOString();
-      setErrorBanner(null);
-    } catch (error) {
-      console.error(error);
-      setErrorBanner(error?.message || 'Failed to load graph');
-    }
-  }, [projectId]);
+function renderErrorBanner() {
+  if (!ui.errorBanner || !ui.errorMessage) return;
+  if (state.errorBanner) {
+    ui.errorBanner.classList.remove('hidden');
+    ui.errorMessage.textContent = state.errorBanner;
+  } else {
+    ui.errorBanner.classList.add('hidden');
+    ui.errorMessage.textContent = '';
+  }
+}
 
-  useEffect(() => {
-    loadGraph();
-  }, [loadGraph]);
+function renderSessionPanel() {
+  if (!ui.sessionPanel) return;
+  ui.sessionPanel.innerHTML = '';
 
-  useEffect(() => {
-    if (!projectId) {
-      setNodes([]);
-      return;
-    }
-    setNodes(
-      graphNodes.map((node, index) => {
-        const position = node.meta?.position;
-        let pos = position;
-        if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') {
-          pos = {
-            x: 200 + (index % 4) * 220,
-            y: 160 + Math.floor(index / 4) * 180,
-          };
-          if (!initialisedPositions.current.has(node.id)) {
-            initialisedPositions.current.add(node.id);
-            const metaUpdates = { ...(node.meta || {}), position: pos };
-            setGraphNodes((prev) =>
-              prev.map((n) => (n.id === node.id ? { ...n, meta: metaUpdates } : n))
-            );
-            fetchJSON(`${API_BASE}/node/${node.id}`, {
-              method: 'PATCH',
-              body: { meta: metaUpdates, project_id: projectId },
-            }).catch((err) => console.warn('Failed to seed node position', err));
-          }
-        }
-        return {
-          id: node.id,
-          position: pos,
-          data: { label: node.label || node.id },
-        };
-      })
-    );
-  }, [graphNodes, setNodes, projectId]);
+  const heading = document.createElement('h2');
+  heading.textContent = 'Session';
+  ui.sessionPanel.appendChild(heading);
 
-  useEffect(() => {
-    setEdges(
-      graphEdges.map((edge, index) => ({
-        id: `${edge.from}-${edge.to}-${edge.type || 'LINKS_TO'}-${index}`,
-        source: edge.from,
-        target: edge.to,
-        label: edge.type && edge.type !== 'LINKS_TO' ? edge.type : undefined,
-        data: edge.props || {},
-      }))
-    );
-  }, [graphEdges, setEdges]);
+  if (state.projectId) {
+    const field = document.createElement('div');
+    field.className = 'field';
+    const label = document.createElement('label');
+    label.textContent = 'Project';
+    const value = document.createElement('div');
+    value.textContent = state.projectId;
+    field.appendChild(label);
+    field.appendChild(value);
+    ui.sessionPanel.appendChild(field);
+  }
 
-  useEffect(() => {
-    if (!selectedNode) {
-      setDraftNode(null);
-      setAutosaveState('idle');
-      setIsDirty(false);
-      return;
-    }
-    setDraftNode({
-      ...selectedNode,
-      meta: { ...(selectedNode.meta || {}) },
+  if (state.configError) {
+    const banner = document.createElement('div');
+    banner.className = 'summary-banner';
+    const title = document.createElement('h3');
+    title.textContent = 'Configuration warning';
+    const message = document.createElement('p');
+    message.textContent = state.configError;
+    banner.appendChild(title);
+    banner.appendChild(message);
+    ui.sessionPanel.appendChild(banner);
+  }
+
+  if (state.sessionError) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = state.sessionError;
+    ui.sessionPanel.appendChild(empty);
+  }
+
+  if (state.session && !state.sessionError) {
+    const field = document.createElement('div');
+    field.className = 'field';
+    const label = document.createElement('label');
+    label.textContent = 'Session';
+    const value = document.createElement('div');
+    value.textContent = state.session.id;
+    field.appendChild(label);
+    field.appendChild(value);
+    ui.sessionPanel.appendChild(field);
+  }
+
+  if (state.summary && state.summary.text) {
+    const banner = document.createElement('div');
+    banner.className = 'summary-banner';
+    const title = document.createElement('h3');
+    title.textContent = 'Summary';
+    const message = document.createElement('p');
+    message.textContent = state.summary.text;
+    banner.appendChild(title);
+    banner.appendChild(message);
+    ui.sessionPanel.appendChild(banner);
+  }
+}
+
+function renderNodeInspector() {
+  if (!ui.nodeInspector) return;
+  ui.nodeInspector.innerHTML = '';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Node inspector';
+  ui.nodeInspector.appendChild(heading);
+
+  if (!state.draftNode) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Select a node to edit details.';
+    ui.nodeInspector.appendChild(empty);
+    return;
+  }
+
+  const labelField = document.createElement('div');
+  labelField.className = 'field';
+  const labelLabel = document.createElement('label');
+  labelLabel.textContent = 'Label';
+  const labelInput = document.createElement('input');
+  labelInput.type = 'text';
+  labelInput.value = state.draftNode.label || '';
+  labelInput.addEventListener('input', (event) => {
+    state.draftNode.label = event.target.value;
+    state.isDirty = true;
+    updateAutosaveState('dirty');
+    scheduleAutosave();
+  });
+  labelField.appendChild(labelLabel);
+  labelField.appendChild(labelInput);
+  ui.nodeInspector.appendChild(labelField);
+
+  const contentField = document.createElement('div');
+  contentField.className = 'field';
+  const contentLabel = document.createElement('label');
+  contentLabel.textContent = 'Content';
+  const contentInput = document.createElement('textarea');
+  contentInput.value = state.draftNode.content || '';
+  contentInput.addEventListener('input', (event) => {
+    state.draftNode.content = event.target.value;
+    state.isDirty = true;
+    updateAutosaveState('dirty');
+    scheduleAutosave();
+  });
+  contentField.appendChild(contentLabel);
+  contentField.appendChild(contentInput);
+  ui.nodeInspector.appendChild(contentField);
+
+  const metaField = document.createElement('div');
+  metaField.className = 'field';
+  const metaLabel = document.createElement('label');
+  metaLabel.textContent = 'Metadata';
+  metaField.appendChild(metaLabel);
+
+  const metaGrid = document.createElement('div');
+  metaGrid.className = 'meta-grid';
+  const entries = Object.entries(state.draftNode.meta || {});
+  if (entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta-empty';
+    empty.textContent = 'No metadata yet.';
+    metaGrid.appendChild(empty);
+  }
+  entries.forEach(([key, value]) => {
+    const originalKey = key;
+    const row = document.createElement('div');
+    row.className = 'meta-row';
+    const keyInput = document.createElement('input');
+    keyInput.type = 'text';
+    keyInput.value = key;
+    keyInput.addEventListener('change', (event) => {
+      const nextKey = event.target.value.trim();
+      const meta = { ...(state.draftNode.meta || {}) };
+      const currentValue = meta[originalKey];
+      delete meta[originalKey];
+      if (nextKey) {
+        meta[nextKey] = currentValue;
+      }
+      state.draftNode.meta = meta;
+      state.isDirty = true;
+      updateAutosaveState('dirty');
+      scheduleAutosave();
+      renderNodeInspector();
     });
-    setAutosaveState('saved');
-    setIsDirty(false);
-  }, [selectedNode]);
+    const valueInput = document.createElement('input');
+    valueInput.type = 'text';
+    valueInput.value = stringifyMetaValue(value);
+    valueInput.addEventListener('input', (event) => {
+      const parsed = parseMetaValue(event.target.value);
+      const meta = { ...(state.draftNode.meta || {}) };
+      meta[key] = parsed;
+      state.draftNode.meta = meta;
+      state.isDirty = true;
+      updateAutosaveState('dirty');
+      scheduleAutosave();
+    });
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'secondary-button';
+    removeButton.textContent = 'Remove';
+    removeButton.addEventListener('click', () => {
+      const meta = { ...(state.draftNode.meta || {}) };
+      delete meta[originalKey];
+      state.draftNode.meta = meta;
+      state.isDirty = true;
+      updateAutosaveState('dirty');
+      scheduleAutosave();
+      renderNodeInspector();
+    });
+    row.appendChild(keyInput);
+    row.appendChild(valueInput);
+    row.appendChild(removeButton);
+    metaGrid.appendChild(row);
+  });
 
-  useEffect(() => {
-    if (!session || selectedNodeId === undefined) return;
-    fetchJSON(`${API_BASE}/sessions/${session.id}`, {
-      method: 'PATCH',
-      body: { active_node: selectedNodeId || null },
-    }).catch((err) => console.warn('Failed to update session', err));
-  }, [session, selectedNodeId]);
+  const newRow = document.createElement('div');
+  newRow.className = 'meta-row meta-row--new';
+  const newKeyInput = document.createElement('input');
+  newKeyInput.type = 'text';
+  newKeyInput.placeholder = 'key';
+  newKeyInput.value = state.newMetaKey;
+  const newValueInput = document.createElement('input');
+  newValueInput.type = 'text';
+  newValueInput.placeholder = 'value';
+  newValueInput.value = state.newMetaValue;
+  newValueInput.addEventListener('input', (event) => {
+    state.newMetaValue = event.target.value;
+  });
+  const addButton = document.createElement('button');
+  addButton.type = 'button';
+  addButton.textContent = 'Add';
+  addButton.disabled = !state.newMetaKey.trim();
+  newKeyInput.addEventListener('input', (event) => {
+    state.newMetaKey = event.target.value;
+    addButton.disabled = !state.newMetaKey.trim();
+  });
+  addButton.addEventListener('click', () => {
+    if (!state.newMetaKey.trim()) return;
+    const parsed = parseMetaValue(state.newMetaValue);
+    state.draftNode.meta = { ...(state.draftNode.meta || {}), [state.newMetaKey.trim()]: parsed };
+    state.newMetaKey = '';
+    state.newMetaValue = '';
+    state.isDirty = true;
+    updateAutosaveState('dirty');
+    scheduleAutosave();
+    renderNodeInspector();
+  });
+  newRow.appendChild(newKeyInput);
+  newRow.appendChild(newValueInput);
+  newRow.appendChild(addButton);
+  metaGrid.appendChild(newRow);
+  metaField.appendChild(metaGrid);
+  ui.nodeInspector.appendChild(metaField);
 
-  useEffect(() => {
-    if (!draftNode || !selectedNode || !isDirty || !projectId) {
-      return undefined;
-    }
-    setAutosaveState('saving');
-    if (autosaveHandle.current) {
-      clearTimeout(autosaveHandle.current);
-    }
-    autosaveHandle.current = setTimeout(async () => {
-      const payload = {};
-      if (draftNode.label !== selectedNode.label) {
-        payload.label = draftNode.label;
-      }
-      if (draftNode.content !== selectedNode.content) {
-        payload.content = draftNode.content;
-      }
-      if (!deepEqual(draftNode.meta, selectedNode.meta)) {
-        payload.meta = draftNode.meta;
-      }
-      if (Object.keys(payload).length === 0) {
-        setAutosaveState('saved');
-        setIsDirty(false);
-        return;
-      }
-      payload.project_id = projectId;
-      try {
-        const updated = await fetchJSON(`${API_BASE}/node/${draftNode.id}`, {
-          method: 'PATCH',
-          body: payload,
-        });
-        setGraphNodes((prev) => prev.map((node) => (node.id === updated.id ? updated : node)));
-        setAutosaveState('saved');
-        setIsDirty(false);
-      } catch (error) {
-        console.error(error);
-        setAutosaveState('error');
-        setErrorBanner(error?.message || 'Request failed');
-      }
-    }, AUTOSAVE_DELAY);
-    return () => {
-      if (autosaveHandle.current) {
-        clearTimeout(autosaveHandle.current);
-      }
-    };
-  }, [draftNode, selectedNode, isDirty, projectId]);
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'secondary-button';
+  deleteButton.textContent = 'Delete node';
+  deleteButton.addEventListener('click', handleDeleteNode);
+  ui.nodeInspector.appendChild(deleteButton);
+}
 
-  useEffect(() => {
-    if (!session || !projectId) return undefined;
-    const pollInterval = appConfig?.version_poll_interval_ms || DEFAULT_VERSION_INTERVAL;
-    const interval = setInterval(async () => {
-      if (!versionCursor.current) return;
-      const params = new URLSearchParams({ project_id: projectId, since: versionCursor.current });
-      try {
-        const data = await fetchJSON(`${API_BASE}/versions/check?${params.toString()}`);
-        versionCursor.current = new Date().toISOString();
-        if (data?.versions?.length) {
-          await loadGraph();
-        }
-      } catch (error) {
-        console.warn('Version check failed', error);
-      }
-    }, pollInterval);
-    return () => clearInterval(interval);
-  }, [session, loadGraph, projectId, appConfig]);
+function renderEdgesPanel() {
+  if (!ui.edgesPanel) return;
+  ui.edgesPanel.innerHTML = '';
 
-  const refreshMessages = useCallback(async () => {
-    if (!session) return;
-    setMessagesStatus('loading');
-    const params = new URLSearchParams({ session_id: session.id, limit: '50' });
-    if (selectedNodeId) {
-      params.set('node_id', selectedNodeId);
-    }
-    try {
-      const data = await fetchJSON(`${API_BASE}/messages?${params.toString()}`);
-      const list = (data.messages || []).slice().reverse();
-      setMessages(list);
-      setMessagesStatus('ready');
-    } catch (error) {
-      console.error(error);
-      setMessagesStatus('error');
-    }
-  }, [session, selectedNodeId]);
+  const heading = document.createElement('h2');
+  heading.textContent = 'Edges';
+  ui.edgesPanel.appendChild(heading);
 
-  useEffect(() => {
-    refreshMessages();
-  }, [refreshMessages]);
+  if (!state.selectedNodeId) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Select a node to inspect edges.';
+    ui.edgesPanel.appendChild(empty);
+    return;
+  }
 
-  useEffect(() => {
-    if (!session) return;
-    fetchJSON(`${API_BASE}/summaries?session_id=${session.id}&limit=1`)
-      .then((data) => {
-        const latest = data.summaries?.[0];
-        if (latest) {
-          setSummary(latest.summary_json);
-        }
-      })
-      .catch((error) => console.warn('Failed to load summary', error));
-  }, [session]);
-
-  useEffect(() => {
-    if (!projectId) return;
-    const params = new URLSearchParams({ project_id: projectId });
-    fetchJSON(`${API_BASE}/checkpoints?${params.toString()}`)
-      .then((data) => setCheckpoints(data.checkpoints || []))
-      .catch((error) => console.warn('Failed to load checkpoints', error));
-  }, [projectId]);
-
-  const handleNodesChange = useCallback(
-    (changes) => {
-      onNodesChangeBase(changes);
-      const updates = [];
-      changes.forEach((change) => {
-        if (change.type === 'position' && !change.dragging && change.position) {
-          updates.push({ id: change.id, position: change.position });
-        }
-      });
-      if (updates.length) {
-        if (!projectId) return;
-        setGraphNodes((prev) =>
-          prev.map((node) => {
-            const update = updates.find((item) => item.id === node.id);
-            if (!update) return node;
-            const updatedMeta = { ...(node.meta || {}), position: update.position };
-            if (node.id === draftNode?.id) {
-              setDraftNode((current) =>
-                current
-                  ? {
-                      ...current,
-                      meta: { ...updatedMeta },
-                    }
-                  : current
-              );
-            }
-            return { ...node, meta: updatedMeta };
-          })
-        );
-        if (!isDirty) {
-          setAutosaveState('saving');
-        }
-        Promise.all(
-          updates.map((update) => {
-            const node = graphNodes.find((n) => n.id === update.id);
-            const baseMetaSource =
-              draftNode?.id === update.id && draftNode?.meta
-                ? draftNode.meta
-                : node?.meta;
-            const baseMeta = baseMetaSource
-              ? { ...baseMetaSource, position: update.position }
-              : { position: update.position };
-            return fetchJSON(`${API_BASE}/node/${update.id}`, {
-              method: 'PATCH',
-              body: { meta: baseMeta, project_id: projectId },
-            });
-          })
-        )
-          .then(() => {
-            if (!isDirty) {
-              setAutosaveState('saved');
-            }
-          })
-          .catch((err) => {
-            console.warn('Failed to persist position', err);
-            if (!isDirty) {
-              setAutosaveState('error');
-            }
-            setErrorBanner(err?.message || 'Failed to persist position');
-          });
-      }
-    },
-    [onNodesChangeBase, draftNode, graphNodes, isDirty, projectId]
+  const connected = state.graphEdges.filter(
+    (edge) => edge.from === state.selectedNodeId || edge.to === state.selectedNodeId
   );
 
-  const handleConnect = useCallback(
-    async (connection) => {
-      if (!projectId) return;
-      try {
-        const created = await fetchJSON(`${API_BASE}/edge`, {
-          method: 'POST',
-          body: {
-            from: connection.source,
-            to: connection.target,
-            type: connection.type || 'LINKS_TO',
-            project_id: projectId,
-          },
-        });
-        setGraphEdges((prev) => [...prev, created]);
-        setEdges((eds) => addEdge(connection, eds));
-      } catch (error) {
-        console.error(error);
-        setErrorBanner(error?.message || 'Request failed');
-      }
-    },
-    [setEdges, projectId]
-  );
+  if (connected.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No edges linked.';
+    ui.edgesPanel.appendChild(empty);
+  } else {
+    connected.forEach((edge) => {
+      const item = document.createElement('div');
+      item.className = 'checkpoint-item';
+      const span = document.createElement('span');
+      const direction = edge.from === state.selectedNodeId ? '→' : '←';
+      const other = edge.from === state.selectedNodeId ? edge.to : edge.from;
+      const strong = document.createElement('strong');
+      strong.textContent = `${direction} ${other}`;
+      const time = document.createElement('time');
+      time.textContent = edge.type || 'LINKS_TO';
+      span.appendChild(strong);
+      span.appendChild(time);
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'secondary-button';
+      removeButton.textContent = 'Remove';
+      removeButton.addEventListener('click', () => handleDeleteEdge(edge));
+      item.appendChild(span);
+      item.appendChild(removeButton);
+      ui.edgesPanel.appendChild(item);
+    });
+  }
 
-  const handleAddNode = useCallback(async () => {
-    if (!projectId) return;
-    const label = window.prompt('Node label', 'New Story Node');
-    if (!label) return;
-    const position = {
-      x: 200 + (graphNodes.length % 4) * 220,
-      y: 160 + Math.floor(graphNodes.length / 4) * 200,
-    };
-    try {
-      const created = await fetchJSON(`${API_BASE}/node`, {
-        method: 'POST',
-        body: { label, content: '', meta: { position }, project_id: projectId },
-      });
-      setGraphNodes((prev) => [...prev, created]);
-      setSelectedNodeId(created.id);
-    } catch (error) {
-      console.error(error);
-      setErrorBanner(error?.message || 'Request failed');
-    }
-  }, [graphNodes.length, projectId]);
+  const form = document.createElement('form');
+  form.className = 'edge-form';
+  form.addEventListener('submit', handleAddEdge);
 
-  const handleDeleteNode = useCallback(async () => {
-    if (!selectedNode || !projectId) return;
-    if (!window.confirm(`Delete node "${selectedNode.label || selectedNode.id}"?`)) {
-      return;
-    }
-    try {
-      await fetchJSON(`${API_BASE}/node/${selectedNode.id}`, {
-        method: 'DELETE',
-        body: { project_id: projectId },
-      });
-      setGraphNodes((prev) => prev.filter((node) => node.id !== selectedNode.id));
-      setGraphEdges((prev) => prev.filter((edge) => edge.from !== selectedNode.id && edge.to !== selectedNode.id));
-      setSelectedNodeId(null);
-    } catch (error) {
-      console.error(error);
-      setErrorBanner(error?.message || 'Request failed');
-    }
-  }, [selectedNode, projectId]);
+  const targetLabel = document.createElement('label');
+  targetLabel.textContent = 'Create connection';
+  form.appendChild(targetLabel);
 
-  const handleDeleteEdge = useCallback(
-    async (edge) => {
-      if (!projectId) return;
-      try {
-        await fetchJSON(`${API_BASE}/edge`, {
-          method: 'DELETE',
-          body: { from: edge.from, to: edge.to, type: edge.type, project_id: projectId },
-        });
-        setGraphEdges((prev) => prev.filter((item) => item !== edge));
-      } catch (error) {
-        console.error(error);
-        setErrorBanner(error.message);
-      }
-    },
-    [projectId]
-  );
+  const controlRow = document.createElement('div');
+  controlRow.className = 'edge-form__controls';
 
-  const handleMessageSubmit = useCallback(
-    async (event) => {
-      event.preventDefault();
-      if (!session || !newMessage.trim()) return;
-      try {
-        await fetchJSON(`${API_BASE}/messages`, {
-          method: 'POST',
-          body: {
-            session_id: session.id,
-            node_id: selectedNodeId || null,
-            role: 'user',
-            content: newMessage.trim(),
-          },
-        });
-        setNewMessage('');
-        refreshMessages();
-      } catch (error) {
-        console.error(error);
-        setErrorBanner(error?.message || 'Request failed');
-      }
-    },
-    [session, newMessage, selectedNodeId, refreshMessages]
-  );
+  const directionSelect = document.createElement('select');
+  directionSelect.innerHTML = `
+    <option value="outgoing">From selected → target</option>
+    <option value="incoming">From target → selected</option>
+  `;
+  directionSelect.value = state.newEdgeDirection;
+  directionSelect.addEventListener('change', (event) => {
+    state.newEdgeDirection = event.target.value;
+  });
 
-  const handleSaveSummary = useCallback(async () => {
-    if (!session || !summaryDraft.trim()) return;
-    try {
-      const payload = {
-        session_id: session.id,
-        nodes: selectedNodeId ? [selectedNodeId] : [],
-        text: summaryDraft.trim(),
-        last_n: messages.length,
+  const targetSelect = document.createElement('select');
+  const placeholderOption = document.createElement('option');
+  placeholderOption.value = '';
+  placeholderOption.textContent = 'Choose node';
+  targetSelect.appendChild(placeholderOption);
+  const nodes = state.graphNodes.filter((node) => node.id !== state.selectedNodeId);
+  const availableIds = nodes.map((node) => node.id);
+  nodes.forEach((node) => {
+    const option = document.createElement('option');
+    option.value = node.id;
+    option.textContent = node.label || node.id;
+    targetSelect.appendChild(option);
+  });
+  if (!availableIds.includes(state.newEdgeTarget)) {
+    state.newEdgeTarget = '';
+  }
+  targetSelect.value = state.newEdgeTarget;
+  const typeInput = document.createElement('input');
+  typeInput.type = 'text';
+  typeInput.placeholder = 'Type (default LINKS_TO)';
+  typeInput.value = state.newEdgeType;
+  typeInput.addEventListener('input', (event) => {
+    state.newEdgeType = event.target.value;
+  });
+
+  const submitButton = document.createElement('button');
+  submitButton.type = 'submit';
+  submitButton.textContent = 'Add edge';
+  submitButton.disabled = !state.newEdgeTarget;
+
+  targetSelect.addEventListener('change', (event) => {
+    state.newEdgeTarget = event.target.value;
+    submitButton.disabled = !state.newEdgeTarget;
+  });
+
+  controlRow.appendChild(directionSelect);
+  controlRow.appendChild(targetSelect);
+  controlRow.appendChild(typeInput);
+  controlRow.appendChild(submitButton);
+  form.appendChild(controlRow);
+  ui.edgesPanel.appendChild(form);
+}
+
+function renderMessagesPanel() {
+  if (!ui.messagesPanel) return;
+  ui.messagesPanel.innerHTML = '';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Messages';
+  ui.messagesPanel.appendChild(heading);
+
+  if (state.messagesStatus === 'loading') {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Loading messages…';
+    ui.messagesPanel.appendChild(empty);
+  } else if (state.messagesStatus === 'error') {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Failed to load messages.';
+    ui.messagesPanel.appendChild(empty);
+  } else if (state.messages.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No messages yet.';
+    ui.messagesPanel.appendChild(empty);
+  } else {
+    const list = document.createElement('div');
+    list.className = 'messages';
+    state.messages.forEach((message) => {
+      const item = document.createElement('div');
+      item.className = 'message';
+      const header = document.createElement('div');
+      header.className = 'message-header';
+      const role = document.createElement('span');
+      role.textContent = message.role;
+      const time = document.createElement('span');
+      time.textContent = formatDate(message.created_at);
+      header.appendChild(role);
+      header.appendChild(time);
+      const content = document.createElement('div');
+      content.className = 'message-content';
+      content.textContent = message.content;
+      item.appendChild(header);
+      item.appendChild(content);
+      list.appendChild(item);
+    });
+    ui.messagesPanel.appendChild(list);
+  }
+
+  const form = document.createElement('form');
+  form.className = 'messages-form';
+  form.addEventListener('submit', handleMessageSubmit);
+  const textarea = document.createElement('textarea');
+  textarea.placeholder = 'Leave a note about this session';
+  textarea.value = state.newMessage;
+  textarea.addEventListener('input', (event) => {
+    state.newMessage = event.target.value;
+    submit.disabled = !state.newMessage.trim() || !state.session;
+  });
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = 'Add message';
+  submit.disabled = !state.newMessage.trim() || !state.session;
+  form.appendChild(textarea);
+  form.appendChild(submit);
+  ui.messagesPanel.appendChild(form);
+}
+
+function renderSummaryPanel() {
+  if (!ui.summaryPanel) return;
+  ui.summaryPanel.innerHTML = '';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Summary';
+  ui.summaryPanel.appendChild(heading);
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Save summary';
+  button.disabled = !state.summaryDraft.trim() || !state.session;
+  button.addEventListener('click', handleSaveSummary);
+  ui.summaryPanel.appendChild(button);
+
+  const textarea = document.createElement('textarea');
+  textarea.placeholder = 'Summarise what changed...';
+  textarea.value = state.summaryDraft;
+  textarea.addEventListener('input', (event) => {
+    state.summaryDraft = event.target.value;
+    button.disabled = !state.summaryDraft.trim() || !state.session;
+  });
+  ui.summaryPanel.insertBefore(textarea, button);
+}
+
+function renderCheckpointsPanel() {
+  if (!ui.checkpointsPanel) return;
+  ui.checkpointsPanel.innerHTML = '';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Checkpoints';
+  ui.checkpointsPanel.appendChild(heading);
+
+  const field = document.createElement('div');
+  field.className = 'field';
+  const label = document.createElement('label');
+  label.textContent = 'New checkpoint';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Checkpoint name';
+  input.value = state.checkpointName;
+  input.addEventListener('input', (event) => {
+    state.checkpointName = event.target.value;
+    button.disabled = !state.checkpointName.trim() || !state.projectId;
+  });
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Save checkpoint';
+  button.disabled = !state.checkpointName.trim() || !state.projectId;
+  button.addEventListener('click', handleSaveCheckpoint);
+  field.appendChild(label);
+  field.appendChild(input);
+  field.appendChild(button);
+  ui.checkpointsPanel.appendChild(field);
+
+  const list = document.createElement('div');
+  list.className = 'checkpoint-list';
+  if (state.checkpoints.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No checkpoints saved yet.';
+    list.appendChild(empty);
+  } else {
+    state.checkpoints.forEach((checkpoint) => {
+      const item = document.createElement('div');
+      item.className = 'checkpoint-item';
+      const span = document.createElement('span');
+      const strong = document.createElement('strong');
+      strong.textContent = checkpoint.name;
+      const time = document.createElement('time');
+      time.textContent = formatDate(checkpoint.created_at);
+      span.appendChild(strong);
+      span.appendChild(time);
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'secondary-button';
+      restore.textContent = 'Restore';
+      restore.addEventListener('click', () => handleRestoreCheckpoint(checkpoint.id));
+      item.appendChild(span);
+      item.appendChild(restore);
+      list.appendChild(item);
+    });
+  }
+  ui.checkpointsPanel.appendChild(list);
+}
+
+function renderGraph() {
+  if (!ui.graphCanvas) return;
+  const svg = ui.graphCanvas;
+  const NS = 'http://www.w3.org/2000/svg';
+  runtime.nodeElements.clear();
+  runtime.edgeElements = [];
+
+  while (svg.firstChild) {
+    svg.removeChild(svg.firstChild);
+  }
+
+  const nodes = state.graphNodes;
+  const edges = state.graphEdges;
+
+  if (ui.graphEmpty) {
+    ui.graphEmpty.style.display = nodes.length ? 'none' : 'flex';
+  }
+
+  if (nodes.length === 0) {
+    return;
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  nodes.forEach((node, index) => {
+    const position = node.meta?.position;
+    if (position && typeof position.x === 'number' && typeof position.y === 'number') {
+      minX = Math.min(minX, position.x);
+      minY = Math.min(minY, position.y);
+      maxX = Math.max(maxX, position.x);
+      maxY = Math.max(maxY, position.y);
+    } else {
+      const fallback = {
+        x: 200 + (index % 4) * 220,
+        y: 160 + Math.floor(index / 4) * 200,
       };
-      const saved = await fetchJSON(`${API_BASE}/summaries/rollup`, {
-        method: 'POST',
-        body: payload,
-      });
-      setSummary(saved.summary_json);
-      setSummaryDraft('');
-    } catch (error) {
-      console.error(error);
-      setErrorBanner(error?.message || 'Request failed');
+      minX = Math.min(minX, fallback.x);
+      minY = Math.min(minY, fallback.y);
+      maxX = Math.max(maxX, fallback.x);
+      maxY = Math.max(maxY, fallback.y);
     }
-  }, [session, summaryDraft, selectedNodeId, messages.length]);
+  });
+  if (minX === Infinity) {
+    minX = 0;
+    maxX = 1200;
+    minY = 0;
+    maxY = 800;
+  }
+  const margin = 200;
+  const viewWidth = Math.max(400, maxX - minX + margin * 2);
+  const viewHeight = Math.max(400, maxY - minY + margin * 2);
+  const viewX = minX - margin;
+  const viewY = minY - margin;
+  svg.setAttribute('viewBox', `${viewX} ${viewY} ${viewWidth} ${viewHeight}`);
 
-  const handleSaveCheckpoint = useCallback(async () => {
-    if (!projectId) return;
-    const name = checkpointName.trim();
-    if (!name) return;
-    try {
-      await fetchJSON(`${API_BASE}/checkpoints`, {
-        method: 'POST',
-        body: { name, project_id: projectId },
-      });
-      setCheckpointName('');
-      const params = new URLSearchParams({ project_id: projectId });
-      const refreshed = await fetchJSON(`${API_BASE}/checkpoints?${params.toString()}`);
-      setCheckpoints(refreshed.checkpoints || []);
-    } catch (error) {
-      console.error(error);
-      setErrorBanner(error?.message || 'Request failed');
+  const edgesGroup = document.createElementNS(NS, 'g');
+  edgesGroup.classList.add('graph-edges');
+  const nodesGroup = document.createElementNS(NS, 'g');
+  nodesGroup.classList.add('graph-nodes');
+
+  const nodePositions = new Map();
+  nodes.forEach((node) => {
+    const position = node.meta?.position || { x: 0, y: 0 };
+    nodePositions.set(node.id, position);
+  });
+
+  edges.forEach((edge) => {
+    const from = nodePositions.get(edge.from);
+    const to = nodePositions.get(edge.to);
+    if (!from || !to) return;
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', from.x);
+    line.setAttribute('y1', from.y);
+    line.setAttribute('x2', to.x);
+    line.setAttribute('y2', to.y);
+    line.classList.add('graph-edge');
+    edgesGroup.appendChild(line);
+    let labelElement = null;
+    if (edge.type && edge.type !== 'LINKS_TO') {
+      labelElement = document.createElementNS(NS, 'text');
+      labelElement.classList.add('graph-edge-label');
+      labelElement.textContent = edge.type;
+      labelElement.setAttribute('x', (from.x + to.x) / 2);
+      labelElement.setAttribute('y', (from.y + to.y) / 2);
+      edgesGroup.appendChild(labelElement);
     }
-  }, [checkpointName, projectId]);
+    runtime.edgeElements.push({
+      from: edge.from,
+      to: edge.to,
+      line,
+      label: labelElement,
+    });
+  });
 
-  const handleRestoreCheckpoint = useCallback(
-    async (checkpointId) => {
-      if (!checkpointId || !projectId) return;
-      if (!window.confirm('Restore checkpoint? Current graph will be replaced.')) {
-        return;
+  nodes.forEach((node) => {
+    const position = node.meta?.position || { x: 0, y: 0 };
+    const group = document.createElementNS(NS, 'g');
+    group.classList.add('graph-node');
+    if (node.id === state.selectedNodeId) {
+      group.classList.add('selected');
+    }
+    group.dataset.nodeId = node.id;
+
+    const circle = document.createElementNS(NS, 'circle');
+    circle.setAttribute('cx', position.x);
+    circle.setAttribute('cy', position.y);
+    circle.setAttribute('r', 38);
+
+    const label = document.createElementNS(NS, 'text');
+    label.setAttribute('x', position.x);
+    label.setAttribute('y', position.y + 4);
+    label.textContent = node.label || node.id;
+
+    group.appendChild(circle);
+    group.appendChild(label);
+
+    group.addEventListener('pointerdown', (event) => {
+      event.stopPropagation();
+      selectNode(node.id);
+      startDrag(node.id, event);
+    });
+    group.addEventListener('click', (event) => {
+      event.stopPropagation();
+      selectNode(node.id);
+    });
+
+    nodesGroup.appendChild(group);
+    runtime.nodeElements.set(node.id, { group, circle, label });
+  });
+
+  svg.appendChild(edgesGroup);
+  svg.appendChild(nodesGroup);
+}
+
+function refreshUI() {
+  renderStatus();
+  renderErrorBanner();
+  renderSessionPanel();
+  renderNodeInspector();
+  renderEdgesPanel();
+  renderMessagesPanel();
+  renderSummaryPanel();
+  renderCheckpointsPanel();
+  renderGraph();
+}
+
+function selectNode(nodeId) {
+  if (state.selectedNodeId === nodeId && state.draftNode) {
+    return;
+  }
+  clearAutosaveTimer();
+  state.selectedNodeId = nodeId;
+  if (nodeId) {
+    const node = state.graphNodes.find((item) => item.id === nodeId);
+    state.draftNode = node ? cloneNode(node) : null;
+    state.newMetaKey = '';
+    state.newMetaValue = '';
+    state.newEdgeTarget = '';
+    state.newEdgeType = 'LINKS_TO';
+    state.newEdgeDirection = 'outgoing';
+    state.isDirty = false;
+    updateAutosaveState('saved');
+  } else {
+    state.draftNode = null;
+    state.isDirty = false;
+    updateAutosaveState('idle');
+  }
+  renderNodeInspector();
+  renderEdgesPanel();
+  renderGraph();
+  refreshMessages();
+  if (state.session) {
+    fetchJSON(`${API_BASE}/sessions/${state.session.id}`, {
+      method: 'PATCH',
+      body: { active_node: nodeId || null },
+    }).catch((err) => console.warn('Failed to update session', err));
+  }
+}
+
+function clearAutosaveTimer() {
+  if (runtime.autosaveTimer) {
+    clearTimeout(runtime.autosaveTimer);
+    runtime.autosaveTimer = null;
+  }
+}
+
+function scheduleAutosave() {
+  clearAutosaveTimer();
+  runtime.autosaveTimer = setTimeout(runAutosave, AUTOSAVE_DELAY);
+}
+
+async function runAutosave() {
+  runtime.autosaveTimer = null;
+  if (!state.draftNode || !state.selectedNodeId || !state.projectId) {
+    return;
+  }
+  const original = state.graphNodes.find((node) => node.id === state.selectedNodeId);
+  if (!original) return;
+  const payload = {};
+  if (state.draftNode.label !== original.label) {
+    payload.label = state.draftNode.label || '';
+  }
+  if (state.draftNode.content !== original.content) {
+    payload.content = state.draftNode.content || '';
+  }
+  if (!deepEqual(state.draftNode.meta, original.meta)) {
+    payload.meta = state.draftNode.meta || {};
+  }
+  if (Object.keys(payload).length === 0) {
+    state.isDirty = false;
+    updateAutosaveState('saved');
+    return;
+  }
+  payload.project_id = state.projectId;
+  updateAutosaveState('saving');
+  try {
+    const updated = await fetchJSON(`${API_BASE}/node/${state.selectedNodeId}`, {
+      method: 'PATCH',
+      body: payload,
+    });
+    const index = state.graphNodes.findIndex((node) => node.id === updated.id);
+    if (index >= 0) {
+      state.graphNodes[index] = updated;
+    }
+    state.draftNode = cloneNode(updated);
+    state.isDirty = false;
+    updateAutosaveState('saved');
+    renderGraph();
+    renderNodeInspector();
+    renderEdgesPanel();
+  } catch (error) {
+    console.error(error);
+    updateAutosaveState('error');
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+function applyDefaultPositions() {
+  state.graphNodes.forEach((node, index) => {
+    const position = node.meta?.position;
+    if (!position || typeof position.x !== 'number' || typeof position.y !== 'number') {
+      const newPosition = {
+        x: 200 + (index % 4) * 220,
+        y: 160 + Math.floor(index / 4) * 200,
+      };
+      node.meta = { ...(node.meta || {}), position: newPosition };
+      if (!runtime.seededPositions.has(node.id) && state.projectId) {
+        runtime.seededPositions.add(node.id);
+        fetchJSON(`${API_BASE}/node/${node.id}`, {
+          method: 'PATCH',
+          body: { meta: node.meta, project_id: state.projectId },
+        }).catch((err) => console.warn('Failed to seed node position', err));
       }
-      try {
-        await fetchJSON(`${API_BASE}/checkpoints/${checkpointId}/restore`, { method: 'POST' });
-        await loadGraph();
-        const params = new URLSearchParams({ project_id: projectId });
-        const refreshed = await fetchJSON(`${API_BASE}/checkpoints?${params.toString()}`);
-        setCheckpoints(refreshed.checkpoints || []);
-      } catch (error) {
-        console.error(error);
-        setErrorBanner(error?.message || 'Request failed');
-      }
-    },
-    [loadGraph, projectId]
-  );
-
-  const connectedEdges = useMemo(
-    () => graphEdges.filter((edge) => edge.from === selectedNodeId || edge.to === selectedNodeId),
-    [graphEdges, selectedNodeId]
-  );
-
-  const statusLabel = useMemo(() => {
-    switch (autosaveState) {
-      case 'saving':
-        return 'Saving…';
-      case 'saved':
-        return 'Saved';
-      case 'error':
-        return 'Autosave failed';
-      case 'idle':
-        return 'Idle';
-      default:
-        return 'Editing…';
     }
-  }, [autosaveState]);
+  });
+}
 
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="header-title">
+function getSvgPoint(event) {
+  const svg = ui.graphCanvas;
+  if (!svg) {
+    return { x: 0, y: 0 };
+  }
+  const point = svg.createSVGPoint();
+  point.x = event.clientX;
+  point.y = event.clientY;
+  const ctm = svg.getScreenCTM();
+  if (!ctm) {
+    return { x: point.x, y: point.y };
+  }
+  const inverse = ctm.inverse();
+  const transformed = point.matrixTransform(inverse);
+  return { x: transformed.x, y: transformed.y };
+}
+
+function startDrag(nodeId, event) {
+  if (!ui.graphCanvas) return;
+  const { x, y } = getSvgPoint(event);
+  const node = state.graphNodes.find((item) => item.id === nodeId);
+  if (!node) return;
+  const position = node.meta?.position || { x: 0, y: 0 };
+  runtime.dragging = {
+    nodeId,
+    pointerId: event.pointerId,
+    offsetX: x - position.x,
+    offsetY: y - position.y,
+  };
+  try {
+    ui.graphCanvas.setPointerCapture(event.pointerId);
+  } catch (err) {
+    // Pointer capture may fail; ignore.
+  }
+}
+
+function updateNodeElementPosition(nodeId, position) {
+  const entry = runtime.nodeElements.get(nodeId);
+  if (!entry) return;
+  entry.circle.setAttribute('cx', position.x);
+  entry.circle.setAttribute('cy', position.y);
+  entry.label.setAttribute('x', position.x);
+  entry.label.setAttribute('y', position.y + 4);
+}
+
+function updateEdgesForNode(nodeId) {
+  runtime.edgeElements.forEach((edge) => {
+    if (edge.from !== nodeId && edge.to !== nodeId) return;
+    const fromNode = state.graphNodes.find((node) => node.id === edge.from);
+    const toNode = state.graphNodes.find((node) => node.id === edge.to);
+    if (!fromNode || !toNode) return;
+    const fromPos = fromNode.meta?.position || { x: 0, y: 0 };
+    const toPos = toNode.meta?.position || { x: 0, y: 0 };
+    edge.line.setAttribute('x1', fromPos.x);
+    edge.line.setAttribute('y1', fromPos.y);
+    edge.line.setAttribute('x2', toPos.x);
+    edge.line.setAttribute('y2', toPos.y);
+    if (edge.label) {
+      edge.label.setAttribute('x', (fromPos.x + toPos.x) / 2);
+      edge.label.setAttribute('y', (fromPos.y + toPos.y) / 2);
+    }
+  });
+}
+
+function handlePointerMove(event) {
+  if (!runtime.dragging || runtime.dragging.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const { x, y } = getSvgPoint(event);
+  const newPosition = {
+    x: x - runtime.dragging.offsetX,
+    y: y - runtime.dragging.offsetY,
+  };
+  const node = state.graphNodes.find((item) => item.id === runtime.dragging.nodeId);
+  if (!node) return;
+  node.meta = { ...(node.meta || {}), position: newPosition };
+  if (state.draftNode && state.draftNode.id === node.id) {
+    state.draftNode.meta = { ...(state.draftNode.meta || {}), position: newPosition };
+  }
+  updateNodeElementPosition(node.id, newPosition);
+  updateEdgesForNode(node.id);
+}
+
+function persistNodePosition(nodeId, position) {
+  if (!state.projectId) return;
+  const node = state.graphNodes.find((item) => item.id === nodeId);
+  if (!node) return;
+  const meta = { ...(node.meta || {}), position };
+  node.meta = meta;
+  if (state.draftNode && state.draftNode.id === nodeId) {
+    state.draftNode.meta = { ...(state.draftNode.meta || {}), position };
+  }
+  if (!state.isDirty) {
+    updateAutosaveState('saving');
+  }
+  fetchJSON(`${API_BASE}/node/${nodeId}`, {
+    method: 'PATCH',
+    body: { meta, project_id: state.projectId },
+  })
+    .then(() => {
+      if (!state.isDirty) {
+        updateAutosaveState('saved');
+      }
+      clearErrorBanner();
+    })
+    .catch((error) => {
+      console.warn('Failed to persist position', error);
+      if (!state.isDirty) {
+        updateAutosaveState('error');
+      }
+      setErrorBanner(error?.message || 'Failed to persist position');
+    });
+}
+
+function handlePointerUp(event) {
+  if (!runtime.dragging || runtime.dragging.pointerId !== event.pointerId) return;
+  const { nodeId } = runtime.dragging;
+  runtime.dragging = null;
+  try {
+    ui.graphCanvas.releasePointerCapture(event.pointerId);
+  } catch (err) {
+    // ignore
+  }
+  const node = state.graphNodes.find((item) => item.id === nodeId);
+  if (!node) return;
+  const position = node.meta?.position;
+  if (position) {
+    persistNodePosition(nodeId, position);
+  }
+}
+
+function handlePointerCancel(event) {
+  if (!runtime.dragging || runtime.dragging.pointerId !== event.pointerId) return;
+  runtime.dragging = null;
+  try {
+    ui.graphCanvas.releasePointerCapture(event.pointerId);
+  } catch (err) {
+    // ignore
+  }
+}
+
+async function handleAddNode() {
+  if (!state.projectId) return;
+  const label = window.prompt('Node label', 'New Story Node');
+  if (!label) return;
+  const position = {
+    x: 200 + (state.graphNodes.length % 4) * 220,
+    y: 160 + Math.floor(state.graphNodes.length / 4) * 200,
+  };
+  try {
+    const created = await fetchJSON(`${API_BASE}/node`, {
+      method: 'POST',
+      body: { label, content: '', meta: { position }, project_id: state.projectId },
+    });
+    state.graphNodes.push(created);
+    runtime.seededPositions.add(created.id);
+    clearErrorBanner();
+    selectNode(created.id);
+    renderGraph();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function handleDeleteNode() {
+  if (!state.selectedNodeId || !state.projectId) return;
+  const node = state.graphNodes.find((item) => item.id === state.selectedNodeId);
+  const name = node?.label || state.selectedNodeId;
+  if (!window.confirm(`Delete node "${name}"?`)) {
+    return;
+  }
+  try {
+    await fetchJSON(`${API_BASE}/node/${state.selectedNodeId}`, {
+      method: 'DELETE',
+      body: { project_id: state.projectId },
+    });
+    state.graphNodes = state.graphNodes.filter((item) => item.id !== state.selectedNodeId);
+    state.graphEdges = state.graphEdges.filter(
+      (edge) => edge.from !== state.selectedNodeId && edge.to !== state.selectedNodeId
+    );
+    runtime.seededPositions.delete(state.selectedNodeId);
+    selectNode(null);
+    clearErrorBanner();
+    renderGraph();
+    renderEdgesPanel();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function handleDeleteEdge(edge) {
+  if (!state.projectId) return;
+  try {
+    await fetchJSON(`${API_BASE}/edge`, {
+      method: 'DELETE',
+      body: { from: edge.from, to: edge.to, type: edge.type, project_id: state.projectId },
+    });
+    state.graphEdges = state.graphEdges.filter((item) => item !== edge);
+    clearErrorBanner();
+    renderGraph();
+    renderEdgesPanel();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function handleAddEdge(event) {
+  event.preventDefault();
+  if (!state.projectId || !state.selectedNodeId || !state.newEdgeTarget) return;
+  const type = state.newEdgeType.trim() || 'LINKS_TO';
+  const target = state.newEdgeTarget;
+  let from = state.selectedNodeId;
+  let to = target;
+  if (state.newEdgeDirection === 'incoming') {
+    from = target;
+    to = state.selectedNodeId;
+  }
+  try {
+    const created = await fetchJSON(`${API_BASE}/edge`, {
+      method: 'POST',
+      body: { from, to, type, project_id: state.projectId },
+    });
+    state.graphEdges.push(created);
+    state.newEdgeTarget = '';
+    clearErrorBanner();
+    renderGraph();
+    renderEdgesPanel();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function handleMessageSubmit(event) {
+  event.preventDefault();
+  if (!state.session || !state.newMessage.trim()) return;
+  try {
+    await fetchJSON(`${API_BASE}/messages`, {
+      method: 'POST',
+      body: {
+        session_id: state.session.id,
+        node_id: state.selectedNodeId || null,
+        role: 'user',
+        content: state.newMessage.trim(),
+      },
+    });
+    state.newMessage = '';
+    clearErrorBanner();
+    renderMessagesPanel();
+    refreshMessages();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function handleSaveSummary() {
+  if (!state.session || !state.summaryDraft.trim()) return;
+  try {
+    const payload = {
+      session_id: state.session.id,
+      nodes: state.selectedNodeId ? [state.selectedNodeId] : [],
+      text: state.summaryDraft.trim(),
+      last_n: state.messages.length,
+    };
+    const saved = await fetchJSON(`${API_BASE}/summaries/rollup`, {
+      method: 'POST',
+      body: payload,
+    });
+    state.summary = saved.summary_json;
+    state.summaryDraft = '';
+    clearErrorBanner();
+    renderSessionPanel();
+    renderSummaryPanel();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function handleSaveCheckpoint() {
+  if (!state.projectId) return;
+  const name = state.checkpointName.trim();
+  if (!name) return;
+  try {
+    await fetchJSON(`${API_BASE}/checkpoints`, {
+      method: 'POST',
+      body: { name, project_id: state.projectId },
+    });
+    state.checkpointName = '';
+    clearErrorBanner();
+    renderCheckpointsPanel();
+    await loadCheckpoints();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function handleRestoreCheckpoint(checkpointId) {
+  if (!checkpointId || !state.projectId) return;
+  if (!window.confirm('Restore checkpoint? Current graph will be replaced.')) {
+    return;
+  }
+  try {
+    await fetchJSON(`${API_BASE}/checkpoints/${checkpointId}/restore`, { method: 'POST' });
+    clearErrorBanner();
+    await loadGraph();
+    await loadCheckpoints();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Request failed');
+  }
+}
+
+async function refreshMessages() {
+  if (!state.session) {
+    state.messages = [];
+    state.messagesStatus = 'idle';
+    renderMessagesPanel();
+    return;
+  }
+  state.messagesStatus = 'loading';
+  renderMessagesPanel();
+  const params = new URLSearchParams({ session_id: state.session.id, limit: '50' });
+  if (state.selectedNodeId) {
+    params.set('node_id', state.selectedNodeId);
+  }
+  try {
+    const data = await fetchJSON(`${API_BASE}/messages?${params.toString()}`);
+    state.messages = (data.messages || []).slice().reverse();
+    state.messagesStatus = 'ready';
+  } catch (error) {
+    console.error(error);
+    state.messagesStatus = 'error';
+  }
+  renderMessagesPanel();
+}
+
+async function loadSummary() {
+  if (!state.session) return;
+  try {
+    const data = await fetchJSON(`${API_BASE}/summaries?session_id=${state.session.id}&limit=1`);
+    const latest = data.summaries?.[0];
+    if (latest) {
+      state.summary = latest.summary_json;
+    }
+  } catch (error) {
+    console.warn('Failed to load summary', error);
+  }
+  renderSessionPanel();
+}
+
+async function loadCheckpoints() {
+  if (!state.projectId) return;
+  const params = new URLSearchParams({ project_id: state.projectId });
+  try {
+    const data = await fetchJSON(`${API_BASE}/checkpoints?${params.toString()}`);
+    state.checkpoints = data.checkpoints || [];
+  } catch (error) {
+    console.warn('Failed to load checkpoints', error);
+  }
+  renderCheckpointsPanel();
+}
+
+async function loadGraph() {
+  if (!state.projectId) return;
+  try {
+    const params = new URLSearchParams({ project_id: state.projectId });
+    const data = await fetchJSON(`${API_BASE}/graph?${params.toString()}`);
+    state.graphNodes = data.nodes || [];
+    state.graphEdges = data.edges || [];
+    state.versionCursor = new Date().toISOString();
+    applyDefaultPositions();
+    if (state.selectedNodeId) {
+      const updated = state.graphNodes.find((node) => node.id === state.selectedNodeId);
+      if (updated) {
+        state.draftNode = cloneNode(updated);
+      } else {
+        selectNode(null);
+      }
+    }
+    clearErrorBanner();
+  } catch (error) {
+    console.error(error);
+    setErrorBanner(error?.message || 'Failed to load graph');
+  }
+  renderGraph();
+  renderEdgesPanel();
+}
+
+function stopVersionPolling() {
+  if (runtime.versionInterval) {
+    clearInterval(runtime.versionInterval);
+    runtime.versionInterval = null;
+  }
+}
+
+function startVersionPolling() {
+  stopVersionPolling();
+  if (!state.projectId) return;
+  const pollInterval = state.appConfig?.version_poll_interval_ms || DEFAULT_VERSION_INTERVAL;
+  runtime.versionInterval = setInterval(checkForUpdates, pollInterval);
+}
+
+async function checkForUpdates() {
+  if (!state.projectId || !state.versionCursor) return;
+  const params = new URLSearchParams({ project_id: state.projectId, since: state.versionCursor });
+  try {
+    const data = await fetchJSON(`${API_BASE}/versions/check?${params.toString()}`);
+    state.versionCursor = new Date().toISOString();
+    if (data?.versions?.length) {
+      await loadGraph();
+    }
+  } catch (error) {
+    console.warn('Version check failed', error);
+  }
+}
+
+function setProjectId(projectId) {
+  if (state.projectId === projectId) return;
+  state.projectId = projectId;
+  state.graphNodes = [];
+  state.graphEdges = [];
+  state.selectedNodeId = null;
+  state.draftNode = null;
+  state.autosaveState = 'idle';
+  state.isDirty = false;
+  state.messages = [];
+  state.messagesStatus = 'idle';
+  state.summary = null;
+  state.summaryDraft = '';
+  state.checkpoints = [];
+  state.checkpointName = '';
+  state.newMessage = '';
+  state.errorBanner = null;
+  state.versionCursor = null;
+  runtime.seededPositions.clear();
+  stopVersionPolling();
+  clearAutosaveTimer();
+  refreshUI();
+  if (projectId) {
+    loadGraph();
+    loadCheckpoints();
+    loadSessionForProject(projectId);
+    startVersionPolling();
+  }
+}
+
+async function loadSessionForProject(projectId) {
+  state.session = null;
+  state.sessionError = null;
+  renderSessionPanel();
+  try {
+    const session = await getOrCreateSession(projectId);
+    state.session = session;
+    state.sessionError = null;
+    renderSessionPanel();
+    refreshMessages();
+    loadSummary();
+  } catch (error) {
+    console.error(error);
+    state.sessionError = error?.message || 'Failed to initialise session';
+    renderSessionPanel();
+  }
+}
+
+function initialiseUI() {
+  const root = document.getElementById('root');
+  if (!root) return;
+  root.innerHTML = `
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="header-title">
           <h1>Story Graph Studio</h1>
           <span>Visual editor with live Neo4j + MySQL sync</span>
         </div>
-        <div className="header-actions">
-          <button type="button" onClick={handleAddNode} disabled={!projectId}>
-            Add node
-          </button>
-          <div className="status-indicator" aria-live="polite">
-            <span className={`status-dot ${autosaveState}`}></span>
-            <span>{statusLabel}</span>
+        <div class="header-actions">
+          <button type="button" data-action="add-node">Add node</button>
+          <div class="status-indicator" aria-live="polite">
+            <span class="status-dot" data-status-dot></span>
+            <span data-status-label>Idle</span>
           </div>
         </div>
       </header>
-
-      <section className="graph-panel">
-        {errorBanner && (
-          <div className="summary-banner" style={{ margin: '0.75rem' }}>
-            <h3>Error</h3>
-            <p>{errorBanner}</p>
-          </div>
-        )}
-        <div className="graph-wrapper">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={handleNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={handleConnect}
-            fitView
-            onSelectionChange={({ nodes: selected }) => {
-              setSelectedNodeId(selected[0]?.id || null);
-            }}
-            style={{ width: '100%', height: '100%' }}
-          >
-            <MiniMap />
-            <Controls />
-            <Background />
-          </ReactFlow>
+      <section class="graph-panel">
+        <div class="summary-banner hidden" data-error-banner>
+          <h3>Error</h3>
+          <p data-error-message></p>
+        </div>
+        <div class="graph-wrapper">
+          <svg class="graph-canvas" data-graph-canvas></svg>
+          <div class="graph-empty empty-state" data-graph-empty>Start by adding a node.</div>
         </div>
       </section>
-
-      <aside className="sidebar">
-        <div className="panel">
-          <h2>Session</h2>
-          {projectId && (
-            <div className="field">
-              <label>Project</label>
-              <div>{projectId}</div>
-            </div>
-          )}
-          {configError && (
-            <div className="summary-banner" style={{ backgroundColor: '#fce8e6' }}>
-              <h3>Configuration warning</h3>
-              <p>{configError}</p>
-            </div>
-          )}
-          {sessionError && <div className="empty-state">{sessionError}</div>}
-          {session && (
-            <div className="field">
-              <label>Session</label>
-              <div>{session.id}</div>
-            </div>
-          )}
-          {summary && (
-            <div className="summary-banner">
-              <h3>Summary</h3>
-              <p>{summary.text}</p>
-            </div>
-          )}
-        </div>
-
-        <div className="panel">
-          <h2>Node inspector</h2>
-          {!selectedNode && <div className="empty-state">Select a node to edit details.</div>}
-          {selectedNode && draftNode && (
-            <>
-              <div className="field">
-                <label>Label</label>
-                <input
-                  type="text"
-                  value={draftNode.label || ''}
-                  onChange={(event) => {
-                    setDraftNode((prev) => ({ ...prev, label: event.target.value }));
-                    setIsDirty(true);
-                    setAutosaveState('dirty');
-                  }}
-                />
-              </div>
-              <div className="field">
-                <label>Content</label>
-                <textarea
-                  value={draftNode.content || ''}
-                  onChange={(event) => {
-                    setDraftNode((prev) => ({ ...prev, content: event.target.value }));
-                    setIsDirty(true);
-                    setAutosaveState('dirty');
-                  }}
-                />
-              </div>
-              <div className="field">
-                <label>Metadata</label>
-                <div className="meta-grid">
-                  {Object.entries(draftNode.meta || {}).length === 0 && (
-                    <div className="meta-empty">No metadata yet.</div>
-                  )}
-                  {Object.entries(draftNode.meta || {}).map(([key, value]) => (
-                    <div className="meta-row" key={key}>
-                      <input
-                        type="text"
-                        value={key}
-                        onChange={(event) => {
-                          const nextKey = event.target.value;
-                          setDraftNode((prev) => {
-                            const meta = { ...(prev.meta || {}) };
-                            delete meta[key];
-                            if (nextKey) meta[nextKey] = value;
-                            return { ...prev, meta };
-                          });
-                          setIsDirty(true);
-                          setAutosaveState('dirty');
-                        }}
-                      />
-                      <input
-                        type="text"
-                        value={stringifyMetaValue(value)}
-                        onChange={(event) => {
-                          const parsed = parseMetaValue(event.target.value);
-                          setDraftNode((prev) => ({
-                            ...prev,
-                            meta: { ...(prev.meta || {}), [key]: parsed },
-                          }));
-                          setIsDirty(true);
-                          setAutosaveState('dirty');
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => {
-                          setDraftNode((prev) => {
-                            const meta = { ...(prev.meta || {}) };
-                            delete meta[key];
-                            return { ...prev, meta };
-                          });
-                          setIsDirty(true);
-                          setAutosaveState('dirty');
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="meta-row" style={{ marginTop: '0.5rem' }}>
-                  <input
-                    type="text"
-                    placeholder="key"
-                    value={newMetaKey}
-                    onChange={(event) => setNewMetaKey(event.target.value)}
-                  />
-                  <input
-                    type="text"
-                    placeholder="value"
-                    value={newMetaValue}
-                    onChange={(event) => setNewMetaValue(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    disabled={!newMetaKey.trim()}
-                    onClick={() => {
-                      if (!newMetaKey.trim()) return;
-                      const parsed = parseMetaValue(newMetaValue);
-                      setDraftNode((prev) => ({
-                        ...prev,
-                        meta: { ...(prev.meta || {}), [newMetaKey]: parsed },
-                      }));
-                      setNewMetaKey('');
-                      setNewMetaValue('');
-                      setIsDirty(true);
-                      setAutosaveState('dirty');
-                    }}
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
-              <button type="button" className="secondary-button" onClick={handleDeleteNode}>
-                Delete node
-              </button>
-            </>
-          )}
-        </div>
-
-        {selectedNode && (
-          <div className="panel">
-            <h2>Edges</h2>
-            {connectedEdges.length === 0 && <div className="empty-state">No edges linked.</div>}
-            {connectedEdges.map((edge, index) => (
-              <div className="checkpoint-item" key={`${edge.from}-${edge.to}-${index}`}>
-                <span>
-                  <strong>{edge.from === selectedNodeId ? '→ ' : '← '}{edge.from === selectedNodeId ? edge.to : edge.from}</strong>
-                  <time>{edge.type || 'LINKS_TO'}</time>
-                </span>
-                <button type="button" className="secondary-button" onClick={() => handleDeleteEdge(edge)}>
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="panel">
-          <h2>Messages</h2>
-          {messagesStatus === 'loading' && <div className="empty-state">Loading messages…</div>}
-          {messagesStatus === 'error' && <div className="empty-state">Failed to load messages.</div>}
-          {messagesStatus === 'ready' && messages.length === 0 && (
-            <div className="empty-state">No messages yet.</div>
-          )}
-          {messagesStatus === 'ready' && messages.length > 0 && (
-            <div className="messages">
-              {messages.map((message) => (
-                <div className="message" key={message.id}>
-                  <div className="message-header">
-                    <span>{message.role}</span>
-                    <span>{formatDate(message.created_at)}</span>
-                  </div>
-                  <div className="message-content">{message.content}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          <form className="messages-form" onSubmit={handleMessageSubmit}>
-            <textarea
-              placeholder="Leave a note about this session"
-              value={newMessage}
-              onChange={(event) => setNewMessage(event.target.value)}
-            />
-            <button type="submit" disabled={!newMessage.trim()}>
-              Add message
-            </button>
-          </form>
-        </div>
-
-        <div className="panel">
-          <h2>Summary</h2>
-          <textarea
-            placeholder="Summarise what changed..."
-            value={summaryDraft}
-            onChange={(event) => setSummaryDraft(event.target.value)}
-          />
-          <button type="button" onClick={handleSaveSummary} disabled={!summaryDraft.trim()}>
-            Save summary
-          </button>
-        </div>
-
-        <div className="panel">
-          <h2>Checkpoints</h2>
-          <div className="field">
-            <label>New checkpoint</label>
-            <input
-              type="text"
-              placeholder="Checkpoint name"
-              value={checkpointName}
-              onChange={(event) => setCheckpointName(event.target.value)}
-            />
-            <button type="button" onClick={handleSaveCheckpoint} disabled={!checkpointName.trim()}>
-              Save checkpoint
-            </button>
-          </div>
-          <div className="checkpoint-list">
-            {checkpoints.length === 0 && <div className="empty-state">No checkpoints saved yet.</div>}
-            {checkpoints.map((checkpoint) => (
-              <div className="checkpoint-item" key={checkpoint.id}>
-                <span>
-                  <strong>{checkpoint.name}</strong>
-                  <time>{formatDate(checkpoint.created_at)}</time>
-                </span>
-                <button type="button" className="secondary-button" onClick={() => handleRestoreCheckpoint(checkpoint.id)}>
-                  Restore
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+      <aside class="sidebar">
+        <div class="panel" data-session-panel></div>
+        <div class="panel" data-node-inspector></div>
+        <div class="panel" data-edges-panel></div>
+        <div class="panel" data-messages-panel></div>
+        <div class="panel" data-summary-panel></div>
+        <div class="panel" data-checkpoints-panel></div>
       </aside>
     </div>
-  );
+  `;
+
+  ui.addNodeButton = root.querySelector('[data-action="add-node"]');
+  ui.statusDot = root.querySelector('[data-status-dot]');
+  ui.statusLabel = root.querySelector('[data-status-label]');
+  ui.errorBanner = root.querySelector('[data-error-banner]');
+  ui.errorMessage = root.querySelector('[data-error-message]');
+  ui.graphCanvas = root.querySelector('[data-graph-canvas]');
+  ui.graphEmpty = root.querySelector('[data-graph-empty]');
+  ui.sessionPanel = root.querySelector('[data-session-panel]');
+  ui.nodeInspector = root.querySelector('[data-node-inspector]');
+  ui.edgesPanel = root.querySelector('[data-edges-panel]');
+  ui.messagesPanel = root.querySelector('[data-messages-panel]');
+  ui.summaryPanel = root.querySelector('[data-summary-panel]');
+  ui.checkpointsPanel = root.querySelector('[data-checkpoints-panel]');
+
+  ui.addNodeButton?.addEventListener('click', handleAddNode);
+  ui.graphCanvas?.addEventListener('pointermove', handlePointerMove);
+  ui.graphCanvas?.addEventListener('pointerup', handlePointerUp);
+  ui.graphCanvas?.addEventListener('pointercancel', handlePointerCancel);
+  ui.graphCanvas?.addEventListener('click', (event) => {
+    if (event.target === ui.graphCanvas) {
+      selectNode(null);
+    }
+  });
+
+  refreshUI();
 }
 
-const rootElement = document.getElementById('root');
-if (rootElement) {
-  const root = createRoot(rootElement);
-  root.render(<App />);
+async function loadConfigAndStart() {
+  try {
+    const data = await fetchJSON(`${API_BASE}/config`);
+    state.appConfig = data || {};
+    state.configError = null;
+  } catch (error) {
+    console.error(error);
+    state.appConfig = {};
+    state.configError = error?.message || 'Failed to load configuration';
+  }
+  renderSessionPanel();
+  const projectId = determineProjectId(state.appConfig);
+  setProjectId(projectId);
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  initialiseUI();
+  loadConfigAndStart();
+});
+

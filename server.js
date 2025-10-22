@@ -4,7 +4,7 @@ const morgan = require('morgan');
 
 const config = require('./src/config');
 const apiRouter = require('./src/routes/api');
-const { closeNeo4j } = require('./src/db/neo4j');
+const { closeNeo4j, verifyNeo4jConnection } = require('./src/db/neo4j');
 const { closeMysql, initMysql } = require('./src/db/mysql');
 
 const app = express();
@@ -34,14 +34,14 @@ app.use((err, req, res, next) => {
 
 let server;
 
-initMysql()
+Promise.all([initMysql(), verifyNeo4jConnection()])
   .then(() => {
     server = app.listen(config.port, () => {
       console.log(`Server listening at http://localhost:${config.port}`);
     });
   })
   .catch((error) => {
-    console.error('Failed to initialise MySQL schema', error);
+    console.error('Failed to initialise application services', error);
     process.exit(1);
   });
 

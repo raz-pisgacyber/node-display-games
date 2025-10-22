@@ -83,6 +83,9 @@ async function initMysql() {
       const connection = await pool.getConnection();
       try {
         await ensureSchema(connection);
+        console.log(
+          `Connected to MySQL at ${config.mysql.host}:${config.mysql.port} (schema: ${config.mysql.database})`
+        );
       } finally {
         connection.release();
       }
