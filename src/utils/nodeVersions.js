@@ -1,4 +1,5 @@
 const metaHash = require('./metaHash');
+const { executeWithLogging } = require('./mysqlLogger');
 
 async function upsertNodeVersion(connection, node) {
   const hash = metaHash(node.meta || {});
@@ -11,7 +12,7 @@ async function upsertNodeVersion(connection, node) {
       meta_hash = VALUES(meta_hash),
       project_id = VALUES(project_id)
   `;
-  await connection.execute(sql, [node.project_id, node.id, node.version_id, node.last_modified, hash]);
+  await executeWithLogging(connection, sql, [node.project_id, node.id, node.version_id, node.last_modified, hash]);
 }
 
 async function deleteNodeVersion(connection, nodeId, projectId) {
@@ -19,7 +20,7 @@ async function deleteNodeVersion(connection, nodeId, projectId) {
     ? 'DELETE FROM node_versions WHERE project_id = ? AND node_id = ?'
     : 'DELETE FROM node_versions WHERE node_id = ?';
   const params = projectId ? [projectId, nodeId] : [nodeId];
-  await connection.execute(sql, params);
+  await executeWithLogging(connection, sql, params);
 }
 
 module.exports = {

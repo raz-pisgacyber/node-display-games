@@ -29,7 +29,11 @@ app.get('/', (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ error: 'Internal Server Error', detail: err.message });
+  res.status(500).json({
+    error: err?.message || 'Internal Server Error',
+    sql: err?.sql || null,
+    params: err?.sqlParams || null,
+  });
 });
 
 let server;

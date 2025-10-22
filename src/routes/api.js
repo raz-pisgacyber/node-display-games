@@ -10,8 +10,10 @@ const {
   newVersionMeta,
   validateRelationshipType,
   serialiseMeta,
+  parseMeta,
 } = require('../utils/neo4jHelpers');
 const { upsertNodeVersion, deleteNodeVersion } = require('../utils/nodeVersions');
+const { executeWithLogging, queryWithLogging } = require('../utils/mysqlLogger');
 
 const router = express.Router();
 
@@ -20,14 +22,23 @@ function ensureObject(value) {
   return value;
 }
 
+function normaliseMeta(meta) {
+  return ensureObject(parseMeta(meta));
+}
+
 function sanitiseMeta(meta) {
-  return serialiseMeta(meta);
+  return serialiseMeta(normaliseMeta(meta));
 }
 
 function parseLimitParam(value, defaultValue, maxValue) {
-  const rawFallback = Number.isInteger(defaultValue) ? defaultValue : parseInt(`${defaultValue}`, 10) || 0;
+  const rawFallback = Number.isInteger(defaultValue)
+    ? defaultValue
+    : Number.parseInt(`${defaultValue}`, 10) || 0;
   const fallback = rawFallback > 0 ? rawFallback : 1;
-  const parsed = parseInt(value ?? fallback, 10);
+  const parsed =
+    typeof value === 'number' && Number.isInteger(value)
+      ? value
+      : Number.parseInt(value ?? fallback, 10);
   const safe = Number.isNaN(parsed) ? fallback : parsed;
   const positive = safe < 1 ? fallback : safe;
   if (maxValue === undefined) {
@@ -96,7 +107,7 @@ router.post('/node', async (req, res, next) => {
     return;
   }
   const nodeId = id || uuidv4();
-  const metaData = sanitiseMeta(meta);
+  const metaString = sanitiseMeta(meta);
   const { versionId, lastModified } = newVersionMeta();
   const projectId = (projectIdInput || config.defaults.projectId).toString();
   const session = getWriteSession();
@@ -105,7 +116,7 @@ router.post('/node', async (req, res, next) => {
       tx.run(
         `CREATE (n:ProjectNode {id: $id, project_id: $projectId, label: $label, content: $content, meta: $meta, version_id: $versionId, last_modified: datetime($lastModified)})
          RETURN n`,
-        { id: nodeId, projectId, label, content, meta: metaData, versionId, lastModified }
+        { id: nodeId, projectId, label, content, meta: metaString, versionId, lastModified }
       )
     );
     const node = extractNode(result.records[0].get('n'));
@@ -132,8 +143,8 @@ router.patch('/node/:id', async (req, res, next) => {
 
   const hasCore = Object.keys(coreUpdates).length > 0;
   const hasMetaReplace = metaReplace !== undefined;
-  const metaReplaceObject = hasMetaReplace ? sanitiseMeta(metaReplace) : {};
-  const metaUpdateObject = sanitiseMeta(metaUpdates);
+  const metaReplaceObject = hasMetaReplace ? normaliseMeta(metaReplace) : null;
+  const metaUpdateObject = normaliseMeta(metaUpdates);
   const hasMetaUpdates = !hasMetaReplace && Object.keys(metaUpdateObject).length > 0;
 
   const projectId = (projectIdInput || req.query?.project_id || config.defaults.projectId).toString();
@@ -146,39 +157,47 @@ router.patch('/node/:id', async (req, res, next) => {
   const { versionId, lastModified } = newVersionMeta();
   const session = getWriteSession();
   try {
-    const parts = ['MATCH (n:ProjectNode {id: $id})', 'WHERE coalesce(n.project_id, $projectId) = $projectId', 'SET n.project_id = $projectId'];
-    if (hasCore) {
-      parts.push('SET n += $core');
-    }
-    if (hasMetaReplace) {
-      parts.push('SET n.meta = $metaReplace');
-    } else if (hasMetaUpdates) {
-      parts.push('SET n.meta = coalesce(n.meta, {}) + $metaUpdates');
-    }
-    parts.push('SET n.last_modified = datetime($lastModified), n.version_id = $versionId');
-    parts.push('RETURN n');
-    const query = parts.join('\n');
-    const params = {
-      id,
-      lastModified,
-      versionId,
-      projectId,
-    };
-    if (hasCore) {
-      params.core = coreUpdates;
-    }
-    if (hasMetaReplace) {
-      params.metaReplace = metaReplaceObject;
-    }
-    if (hasMetaUpdates) {
-      params.metaUpdates = metaUpdateObject;
-    }
-    const result = await session.writeTransaction((tx) => tx.run(query, params));
-    if (result.records.length === 0) {
+    const result = await session.writeTransaction(async (tx) => {
+      const existingResult = await tx.run(
+        `MATCH (n:ProjectNode {id: $id})
+         WHERE coalesce(n.project_id, $projectId) = $projectId
+         RETURN n`,
+        { id, projectId }
+      );
+      if (existingResult.records.length === 0) {
+        return { notFound: true };
+      }
+      const existingNode = extractNode(existingResult.records[0].get('n'));
+      const queryParts = [
+        'MATCH (n:ProjectNode {id: $id})',
+        'WHERE coalesce(n.project_id, $projectId) = $projectId',
+        'SET n.project_id = $projectId',
+      ];
+      const params = {
+        id,
+        projectId,
+        lastModified,
+        versionId,
+      };
+      if (hasCore) {
+        params.core = coreUpdates;
+        queryParts.push('SET n += $core');
+      }
+      if (hasMetaReplace || hasMetaUpdates) {
+        const mergedMeta = hasMetaReplace ? { ...metaReplaceObject } : { ...existingNode.meta, ...metaUpdateObject };
+        params.meta = sanitiseMeta(mergedMeta);
+        queryParts.push('SET n.meta = $meta');
+      }
+      queryParts.push('SET n.last_modified = datetime($lastModified), n.version_id = $versionId');
+      queryParts.push('RETURN n');
+      const updateResult = await tx.run(queryParts.join('\n'), params);
+      return { updateResult };
+    });
+    if (!result || result.notFound || result.updateResult.records.length === 0) {
       res.status(404).json({ error: 'Node not found' });
       return;
     }
-    const node = extractNode(result.records[0].get('n'));
+    const node = extractNode(result.updateResult.records[0].get('n'));
     const connection = await pool.getConnection();
     try {
       await upsertNodeVersion(connection, { ...node, project_id: projectId });
@@ -336,7 +355,8 @@ router.post('/messages', async (req, res, next) => {
     return;
   }
   try {
-    const [result] = await pool.execute(
+    const [result] = await executeWithLogging(
+      pool,
       `INSERT INTO messages (session_id, node_id, role, content) VALUES (?, ?, ?, ?)` ,
       [session_id, node_id, role, content]
     );
@@ -352,7 +372,8 @@ router.get('/messages', async (req, res, next) => {
     res.status(400).json({ error: 'session_id is required' });
     return;
   }
-  const cappedLimit = parseLimitParam(limit, 50, 200);
+  const rawLimit = Number.parseInt(limit ?? 50, 10);
+  const cappedLimit = parseLimitParam(rawLimit, 50, 200);
   const params = [session_id];
   let sql = 'SELECT * FROM messages WHERE session_id = ?';
   if (node_id) {
@@ -363,10 +384,9 @@ router.get('/messages', async (req, res, next) => {
     sql += ' AND created_at < ?';
     params.push(before);
   }
-  sql += ' ORDER BY created_at DESC LIMIT ?';
-  params.push(cappedLimit);
+  sql += ` ORDER BY created_at DESC LIMIT ${cappedLimit}`;
   try {
-    const [rows] = await pool.execute(sql, params);
+    const [rows] = await executeWithLogging(pool, sql, params);
     res.json({ messages: rows });
   } catch (error) {
     next(error);
@@ -381,7 +401,8 @@ router.post('/summaries/rollup', async (req, res, next) => {
   }
   const summaryJson = JSON.stringify({ text, nodes, last_n: last_n ?? null });
   try {
-    const [result] = await pool.execute(
+    const [result] = await executeWithLogging(
+      pool,
       'INSERT INTO summaries (session_id, summary_json) VALUES (?, ?)',
       [session_id, summaryJson]
     );
@@ -397,11 +418,13 @@ router.get('/summaries', async (req, res, next) => {
     res.status(400).json({ error: 'session_id is required' });
     return;
   }
-  const cappedLimit = parseLimitParam(limit, 1, 100);
+  const rawLimit = Number.parseInt(limit ?? 1, 10);
+  const cappedLimit = parseLimitParam(rawLimit, 1, 100);
   try {
-    const [rows] = await pool.execute(
-      'SELECT * FROM summaries WHERE session_id = ? ORDER BY created_at DESC LIMIT ?',
-      [session_id, cappedLimit]
+    const [rows] = await executeWithLogging(
+      pool,
+      `SELECT * FROM summaries WHERE session_id = ? ORDER BY created_at DESC LIMIT ${cappedLimit}`,
+      [session_id]
     );
     const summaries = rows.map((row) => ({
       id: row.id,
@@ -439,6 +462,7 @@ router.post('/checkpoints', async (req, res, next) => {
     const snapshot = {
       nodes: (record?.get('nodes') || []).map((node) => ({
         ...node,
+        meta: normaliseMeta(node.meta),
         project_id: node.project_id || projectId,
         last_modified: node.last_modified?.toString?.() || node.last_modified,
       })),
@@ -446,7 +470,8 @@ router.post('/checkpoints', async (req, res, next) => {
     };
     const json = JSON.stringify(snapshot);
     const checksum = crypto.createHash('sha1').update(json).digest('hex');
-    const [insertResult] = await pool.execute(
+    const [insertResult] = await executeWithLogging(
+      pool,
       `INSERT INTO checkpoints (project_id, name, json_snapshot, checksum) VALUES (?, ?, ?, ?)` ,
       [projectId, name, json, checksum]
     );
@@ -461,7 +486,8 @@ router.post('/checkpoints', async (req, res, next) => {
 router.get('/checkpoints', async (req, res, next) => {
   const projectId = (req.query?.project_id || config.defaults.projectId).toString();
   try {
-    const [rows] = await pool.execute(
+    const [rows] = await executeWithLogging(
+      pool,
       'SELECT id, project_id, name, created_at, checksum FROM checkpoints WHERE project_id = ? ORDER BY created_at DESC',
       [projectId]
     );
@@ -475,7 +501,7 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
   const { id } = req.params;
   const connection = await pool.getConnection();
   try {
-    const [rows] = await connection.execute('SELECT * FROM checkpoints WHERE id = ?', [id]);
+    const [rows] = await executeWithLogging(connection, 'SELECT * FROM checkpoints WHERE id = ?', [id]);
     if (rows.length === 0) {
       res.status(404).json({ error: 'Checkpoint not found' });
       return;
@@ -535,26 +561,26 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
 
     await connection.beginTransaction();
     try {
-      await connection.execute('DELETE FROM node_versions WHERE project_id = ?', [projectId]);
+      await executeWithLogging(connection, 'DELETE FROM node_versions WHERE project_id = ?', [projectId]);
       for (const node of nodes) {
         if (node.project_id && node.project_id !== projectId) continue;
         await upsertNodeVersion(connection, {
           id: node.id,
-          meta: ensureObject(node.meta),
+          meta: normaliseMeta(node.meta),
           version_id: node.version_id,
           last_modified: node.last_modified,
           project_id: projectId,
         });
       }
-      await connection.execute(
+      await executeWithLogging(
         `DELETE m FROM messages m JOIN sessions s ON m.session_id = s.id WHERE s.project_id = ?`,
         [projectId]
       );
-      await connection.execute(
+      await executeWithLogging(
         `DELETE su FROM summaries su JOIN sessions s ON su.session_id = s.id WHERE s.project_id = ?`,
         [projectId]
       );
-      await connection.execute(
+      await executeWithLogging(
         `UPDATE sessions SET active_node = NULL, last_sync = NULL WHERE project_id = ?`,
         [projectId]
       );
@@ -580,7 +606,8 @@ router.post('/sessions', async (req, res, next) => {
   }
   const projectId = projectIdInput.toString();
   try {
-    const [result] = await pool.execute(
+    const [result] = await executeWithLogging(
+      pool,
       `INSERT INTO sessions (user_id, project_id, active_node, last_sync) VALUES (?, ?, ?, NULL)` ,
       [user_id, projectId, active_node]
     );
@@ -609,10 +636,7 @@ router.patch('/sessions/:id', async (req, res, next) => {
   }
   params.push(id);
   try {
-    const [result] = await pool.execute(
-      `UPDATE sessions SET ${updates.join(', ')} WHERE id = ?`,
-      params
-    );
+    const [result] = await executeWithLogging(pool, `UPDATE sessions SET ${updates.join(', ')} WHERE id = ?`, params);
     if (result.affectedRows === 0) {
       res.status(404).json({ error: 'Session not found' });
       return;
@@ -627,7 +651,7 @@ router.get('/health', async (req, res) => {
   const status = { mysql: 'ok', neo4j: 'ok' };
   let session;
   try {
-    await pool.query('SELECT 1');
+    await queryWithLogging(pool, 'SELECT 1');
   } catch (error) {
     status.mysql = 'error';
     status.error = error.message;
@@ -649,6 +673,46 @@ router.get('/health', async (req, res) => {
   }
   const httpStatus = status.mysql === 'ok' && status.neo4j === 'ok' ? 200 : 500;
   res.status(httpStatus).json(status);
+});
+
+router.get('/debug/db', async (req, res) => {
+  const payload = {
+    mysql: { ok: true },
+    neo4j: { ok: true },
+  };
+  let session;
+  try {
+    const [rows] = await queryWithLogging(pool, 'SELECT NOW() AS now');
+    payload.mysql.now = rows?.[0]?.now ?? null;
+  } catch (error) {
+    payload.mysql = {
+      ok: false,
+      error: error.message,
+      sql: error.sql || null,
+      params: error.sqlParams || null,
+    };
+  }
+  try {
+    session = getReadSession();
+    const result = await session.run('RETURN 1 AS ok');
+    const okValue = result.records?.[0]?.get('ok');
+    payload.neo4j.okResult = typeof okValue?.toNumber === 'function' ? okValue.toNumber() : okValue;
+  } catch (error) {
+    payload.neo4j = {
+      ok: false,
+      error: error.message,
+    };
+  } finally {
+    if (session) {
+      try {
+        await session.close();
+      } catch (closeError) {
+        // ignore
+      }
+    }
+  }
+  const statusCode = payload.mysql.ok !== false && payload.neo4j.ok !== false ? 200 : 500;
+  res.status(statusCode).json(payload);
 });
 
 module.exports = router;

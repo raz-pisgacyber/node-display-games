@@ -1,5 +1,6 @@
 const mysql = require('mysql2/promise');
 const config = require('../config');
+const { queryWithLogging, executeWithLogging } = require('../utils/mysqlLogger');
 
 const pool = mysql.createPool(config.mysql);
 
@@ -55,23 +56,23 @@ const SCHEMA_STATEMENTS = [
 async function ensureSchema(connection) {
   for (const statement of SCHEMA_STATEMENTS) {
     // eslint-disable-next-line no-await-in-loop
-    await connection.query(statement);
+    await queryWithLogging(connection, statement);
   }
 
-  const [projectColumn] = await connection.query("SHOW COLUMNS FROM node_versions LIKE 'project_id'");
+  const [projectColumn] = await queryWithLogging(connection, "SHOW COLUMNS FROM node_versions LIKE 'project_id'");
   if (projectColumn.length === 0) {
-    await connection.query('ALTER TABLE node_versions ADD COLUMN project_id VARCHAR(64) NULL');
-    await connection.query('UPDATE node_versions SET project_id = ?', [config.defaults.projectId]);
-    await connection.query('ALTER TABLE node_versions MODIFY project_id VARCHAR(64) NOT NULL');
+    await queryWithLogging(connection, 'ALTER TABLE node_versions ADD COLUMN project_id VARCHAR(64) NULL');
+    await executeWithLogging(connection, 'UPDATE node_versions SET project_id = ?', [config.defaults.projectId]);
+    await queryWithLogging(connection, 'ALTER TABLE node_versions MODIFY project_id VARCHAR(64) NOT NULL');
   }
 
-  const [primaryKey] = await connection.query("SHOW INDEXES FROM node_versions WHERE Key_name = 'PRIMARY'");
+  const [primaryKey] = await queryWithLogging(connection, "SHOW INDEXES FROM node_versions WHERE Key_name = 'PRIMARY'");
   const hasProjectComposite =
     primaryKey.length >= 2 &&
     primaryKey.some((row) => row.Column_name === 'project_id') &&
     primaryKey.some((row) => row.Column_name === 'node_id');
   if (!hasProjectComposite) {
-    await connection.query('ALTER TABLE node_versions DROP PRIMARY KEY, ADD PRIMARY KEY (project_id, node_id)');
+    await queryWithLogging(connection, 'ALTER TABLE node_versions DROP PRIMARY KEY, ADD PRIMARY KEY (project_id, node_id)');
   }
 }
 

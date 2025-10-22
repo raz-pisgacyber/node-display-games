@@ -46,3 +46,11 @@
 - Added explicit read/write session helpers for Neo4j, ensuring write-mode sessions wrap all mutating queries including `/api/graph` and checkpoint operations.
 - Normalised meta payloads by stringifying nested objects before persisting and parsing the values back when nodes are read, with matching hydration logic on the front-end.
 - Hardened LIMIT handling in message and summary SQL queries so parameters are numeric, and enriched the `/api/health` response with distinct MySQL/Neo4j statuses.
+
+## 2025-10-24
+- Files modified: `server.js`, `src/routes/api.js`, `src/utils/neo4jHelpers.js`, `src/utils/nodeVersions.js`, `src/db/mysql.js`, `src/utils/mysqlLogger.js`.
+- Completed tasks:
+  - Reworked Neo4j meta handling to persist JSON strings, merge partial updates in application code, and hydrate node payloads with parsed objects for downstream consumers.
+  - Wrapped every MySQL query/execute call with structured logging, surfaced SQL + parameter context on 500 responses, and introduced a `/api/debug/db` endpoint for simple connectivity checks.
+  - Added a reusable MySQL logging helper, updated schema initialisation and node version utilities to use it, and tightened LIMIT casting by interpolating validated integers into message/summary lookups.
+- Follow-ups: None noted.
