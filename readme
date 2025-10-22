@@ -1,34 +1,167 @@
 # Node Display Games Builder
 
-This project is a modular browser-based builder for organizing creative writing projects.
+A modular browser-based workspace for creating and connecting story ideas. The back end exposes a small REST API that persists
+graph data in Neo4j and collaboration metadata in MySQL, while the front end is served as static ES modules.
 
-## Running the Project Locally
+## Architecture at a glance
+- **Static modules** (`modules/`, `core/`): Delivered directly by Express; each builder (main hub, project view, elements view) boots
+  via native ES module imports in the browser.
+- **API server** (`server.js`, `src/routes/api.js`): Express application that serves static assets and implements JSON endpoints for
+  graph CRUD, messaging, checkpoints, summaries, and session tracking.
+- **Graph store** (`src/db/neo4j.js`): Uses the official Neo4j driver. Nodes are labelled `ProjectNode` with `id`, `label`,
+  `content`, `meta`, `version_id`, and `last_modified` properties. Relationships default to `LINKS_TO` but any validated type is
+  accepted.
+- **Relational store** (`src/db/mysql.js`, `src/utils/nodeVersions.js`): Uses `mysql2/promise` for storing chat-style messages,
+  summaries, checkpoints, session metadata, and a node version lookup table used to detect graph changes.
 
-Modern browsers block ES module imports when loading files directly from the file system. To avoid the `Access to script ... has been blocked by CORS policy` error, serve the repository through a local web server instead of opening `project.html` with the `file://` protocol.
+## Prerequisites
+1. **Node.js 18+** and npm.
+2. **Neo4j instance** – e.g. Neo4j Aura Free. Collect the Bolt URI, username, and password.
+3. **MySQL-compatible database** – the code relies on MySQL syntax (`ON DUPLICATE KEY UPDATE`). Services such as PlanetScale,
+   Aiven MySQL, or any managed MySQL 8 instance will work. _PostgreSQL is not supported without code changes._
+4. Optional: A tool like `curl` or REST client to exercise the API.
 
-### Option 1: Built-in Node server (recommended)
-1. Ensure you have Node.js installed.
-2. From the repository root run:
+## Database preparation
+
+### Neo4j setup
+1. Create a database (Aura Free or self-hosted) and note the Bolt URI, user, and password.
+2. Define helpful constraints for performance and uniqueness:
+   ```cypher
+   CREATE CONSTRAINT project_node_id IF NOT EXISTS
+   FOR (n:ProjectNode)
+   REQUIRE n.id IS UNIQUE;
+   ```
+3. No seed data is required; the API will create nodes on demand. You can create a starter node via the `/api/node` endpoint once
+   the server is running (see **Smoke test** below).
+
+### MySQL schema
+Run the following statements against your MySQL database (adjust types/engine to your provider’s defaults):
+```sql
+CREATE TABLE IF NOT EXISTS node_versions (
+  node_id VARCHAR(64) PRIMARY KEY,
+  version_id VARCHAR(64) NOT NULL,
+  last_modified DATETIME NOT NULL,
+  meta_hash CHAR(40) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id VARCHAR(64) NOT NULL,
+  project_id VARCHAR(64) NOT NULL,
+  active_node VARCHAR(64) NULL,
+  last_sync DATETIME NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_sessions_project (project_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  session_id BIGINT NOT NULL,
+  node_id VARCHAR(64) NULL,
+  role VARCHAR(32) NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_messages_session (session_id),
+  CONSTRAINT fk_messages_session FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS summaries (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  session_id BIGINT NOT NULL,
+  summary_json JSON NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_summaries_session (session_id),
+  CONSTRAINT fk_summaries_session FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  project_id VARCHAR(64) NOT NULL,
+  name VARCHAR(191) NOT NULL,
+  json_snapshot LONGTEXT NOT NULL,
+  checksum CHAR(40) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_checkpoints_project (project_id)
+);
+```
+These definitions cover every table touched by the API. Modify types/lengths if your provider enforces different defaults.
+
+> **Using PostgreSQL?** The current codebase cannot talk to PostgreSQL because it depends on MySQL-specific SQL and the
+> `mysql2` driver. To target PostgreSQL, you would need to swap in the `pg` library and replace `ON DUPLICATE KEY UPDATE`
+> statements with `ON CONFLICT` equivalents in `src/utils/nodeVersions.js`, plus adjust any schema differences.
+
+## Configuration
+All runtime configuration is read from environment variables (see `src/config.js`). Provide them before starting the server:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | HTTP port for Express | `8080` |
+| `NEO4J_URI` | Bolt URI, e.g. `neo4j+s://<your-db>.databases.neo4j.io` | `neo4j://localhost:7687` |
+| `NEO4J_USER` | Neo4j username | `neo4j` |
+| `NEO4J_PASSWORD` | Neo4j password | `password` |
+| `MYSQL_HOST` | MySQL host name | `localhost` |
+| `MYSQL_PORT` | MySQL port | `3306` |
+| `MYSQL_USER` | MySQL username | `root` |
+| `MYSQL_PASSWORD` | MySQL password | _empty_ |
+| `MYSQL_DATABASE` | Database/schema name | `story_graph` |
+| `MYSQL_POOL_SIZE` | Connection pool size | `10` |
+| `DEFAULT_PROJECT_ID` | Project id attached to sessions/checkpoints | `default_project` |
+| `VERSION_POLL_INTERVAL_MS` | Client poll interval for version checks | `5000` |
+
+You can store these in a shell script or `.env` file and export them before running `npm start`.
+
+## Running the project locally
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+2. Export environment variables for your databases:
+   ```bash
+   export NEO4J_URI="neo4j+s://<bolt-host>:7687"
+   export NEO4J_USER="neo4j"
+   export NEO4J_PASSWORD="<neo4j-password>"
+   export MYSQL_HOST="<mysql-host>"
+   export MYSQL_PORT="3306"
+   export MYSQL_USER="<mysql-user>"
+   export MYSQL_PASSWORD="<mysql-password>"
+   export MYSQL_DATABASE="<schema-name>"
+   ```
+3. Start the server:
    ```bash
    npm start
    ```
-3. Open http://localhost:8080/ in your browser to access the main hub. From there you can jump into the Project or Elements builders.
+4. Open [http://localhost:8080](http://localhost:8080) to reach the main hub UI.
 
-### Option 2: Any static server
-You can also use other static servers such as:
-
+## Smoke test
+After the server boots, verify database connectivity:
 ```bash
-npx http-server
-# or
-python -m http.server
+# Health check (verifies both MySQL and Neo4j connections)
+curl http://localhost:8080/api/health
+
+# Create a graph node
+curl -X POST http://localhost:8080/api/node \
+  -H 'Content-Type: application/json' \
+  -d '{"label":"Idea","content":"Start of a new story"}'
+
+# Fetch the full graph
+curl http://localhost:8080/api/graph
 ```
+If the health check fails, confirm that your credentials are correct and that remote database firewalls allow connections from
+this machine.
 
-Serve from the repository root and visit `/modules/main/index.html` (or simply `/`) in your browser.
+## Deploying against hosted databases
+When pointing to managed services (Neo4j Aura, Aiven/PlanetScale, etc.):
+- Whitelist the host running this application in the provider’s firewall settings.
+- For TLS-enabled Neo4j connections, use the `neo4j+s://` URI form supplied by Aura.
+- If the MySQL provider mandates SSL, add driver options in `src/db/mysql.js` (e.g. certificates) before deploying.
+- Latency-sensitive features like version polling rely on accurate timestamps; ensure both databases use UTC.
 
-## Project Structure
-- `core/` – shared utilities, base node logic, and styling.
-- `modules/main/` – landing hub that links to the different builders.
-- `modules/project/` – project-specific node implementation and entry point.
-- `modules/elements/` – story element builder with typed nodes for characters, settings, and other artefacts.
-- `server.js` – lightweight static server used by `npm start`.
-
+## Troubleshooting tips
+- **MySQL packet/SSL errors** – confirm the host/port and SSL requirements. The `mysql2` driver accepts an `ssl` option inside
+  `src/config.js` if required by your provider.
+- **Neo4j authentication errors** – Aura rotates initial passwords; reset the password in the Aura console and update
+  `NEO4J_PASSWORD`.
+- **Static module import errors in browser** – always run via `npm start`; opening files via `file://` triggers CORS issues.
+- **Need to reset the graph** – call `POST /api/checkpoints/:id/restore` using a stored checkpoint or manually wipe Neo4j with
+  `MATCH (n) DETACH DELETE n` and truncate MySQL tables.
