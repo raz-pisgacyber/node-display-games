@@ -3,6 +3,94 @@ const config = require('../config');
 
 const pool = mysql.createPool(config.mysql);
 
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS node_versions (
+    project_id VARCHAR(64) NOT NULL,
+    node_id VARCHAR(64) NOT NULL,
+    version_id VARCHAR(64) NOT NULL,
+    last_modified DATETIME NOT NULL,
+    meta_hash CHAR(40) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, node_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id VARCHAR(64) NOT NULL,
+    project_id VARCHAR(64) NOT NULL,
+    active_node VARCHAR(64) NULL,
+    last_sync DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sessions_project (project_id),
+    INDEX idx_sessions_user_project (user_id, project_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS messages (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    session_id BIGINT NOT NULL,
+    node_id VARCHAR(64) NULL,
+    role VARCHAR(32) NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_messages_session (session_id),
+    CONSTRAINT fk_messages_session FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS summaries (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    session_id BIGINT NOT NULL,
+    summary_json JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_summaries_session (session_id),
+    CONSTRAINT fk_summaries_session FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS checkpoints (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    project_id VARCHAR(64) NOT NULL,
+    name VARCHAR(191) NOT NULL,
+    json_snapshot LONGTEXT NOT NULL,
+    checksum CHAR(40) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_checkpoints_project (project_id)
+  )`,
+];
+
+async function ensureSchema(connection) {
+  for (const statement of SCHEMA_STATEMENTS) {
+    // eslint-disable-next-line no-await-in-loop
+    await connection.query(statement);
+  }
+
+  const [projectColumn] = await connection.query("SHOW COLUMNS FROM node_versions LIKE 'project_id'");
+  if (projectColumn.length === 0) {
+    await connection.query('ALTER TABLE node_versions ADD COLUMN project_id VARCHAR(64) NULL');
+    await connection.query('UPDATE node_versions SET project_id = ?', [config.defaults.projectId]);
+    await connection.query('ALTER TABLE node_versions MODIFY project_id VARCHAR(64) NOT NULL');
+  }
+
+  const [primaryKey] = await connection.query("SHOW INDEXES FROM node_versions WHERE Key_name = 'PRIMARY'");
+  const hasProjectComposite =
+    primaryKey.length >= 2 &&
+    primaryKey.some((row) => row.Column_name === 'project_id') &&
+    primaryKey.some((row) => row.Column_name === 'node_id');
+  if (!hasProjectComposite) {
+    await connection.query('ALTER TABLE node_versions DROP PRIMARY KEY, ADD PRIMARY KEY (project_id, node_id)');
+  }
+}
+
+let initialisationPromise;
+
+async function initMysql() {
+  if (!initialisationPromise) {
+    initialisationPromise = (async () => {
+      const connection = await pool.getConnection();
+      try {
+        await ensureSchema(connection);
+      } finally {
+        connection.release();
+      }
+    })();
+  }
+  return initialisationPromise;
+}
+
 async function closeMysql() {
   await pool.end();
 }
@@ -10,4 +98,5 @@ async function closeMysql() {
 module.exports = {
   pool,
   closeMysql,
+  initMysql,
 };

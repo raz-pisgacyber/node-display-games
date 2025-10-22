@@ -5,7 +5,7 @@ const morgan = require('morgan');
 const config = require('./src/config');
 const apiRouter = require('./src/routes/api');
 const { closeNeo4j } = require('./src/db/neo4j');
-const { closeMysql } = require('./src/db/mysql');
+const { closeMysql, initMysql } = require('./src/db/mysql');
 
 const app = express();
 
@@ -27,13 +27,26 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal Server Error', detail: err.message });
 });
 
-const server = app.listen(config.port, () => {
-  console.log(`Server listening at http://localhost:${config.port}`);
-});
+let server;
+
+initMysql()
+  .then(() => {
+    server = app.listen(config.port, () => {
+      console.log(`Server listening at http://localhost:${config.port}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Failed to initialise MySQL schema', error);
+    process.exit(1);
+  });
 
 async function shutdown() {
   await Promise.allSettled([closeNeo4j(), closeMysql()]);
-  server.close(() => process.exit(0));
+  if (server) {
+    server.close(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
 }
 
 process.on('SIGINT', shutdown);
