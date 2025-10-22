@@ -1,49 +1,104 @@
 const { v4: uuidv4 } = require('uuid');
 
-function tryParseJson(value) {
-  if (typeof value !== 'string') {
-    return value;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  const isComposite = (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
-  if (!isComposite) {
-    return value;
-  }
-  try {
-    return JSON.parse(trimmed);
-  } catch (error) {
-    return value;
-  }
-}
-
 function parseMeta(meta) {
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
-    return meta || {};
+  if (!meta) {
+    return {};
   }
-  return Object.entries(meta).reduce((acc, [key, value]) => {
-    acc[key] = value && typeof value === 'object' ? value : tryParseJson(value);
-    return acc;
-  }, {});
-}
-
-function serialiseMeta(meta) {
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+  if (typeof meta === 'string') {
+    const trimmed = meta.trim();
+    if (!trimmed) {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parseMeta(parsed);
+    } catch (error) {
+      return {};
+    }
+  }
+  if (typeof meta.toObject === 'function') {
+    return parseMeta(meta.toObject());
+  }
+  if (meta instanceof Map) {
+    return parseMeta(Object.fromEntries(meta.entries()));
+  }
+  if (Array.isArray(meta)) {
+    return meta.map((item) => {
+      if (item === null || item === undefined) {
+        return item;
+      }
+      if (typeof item === 'object') {
+        return parseMeta(item);
+      }
+      if (typeof item === 'string') {
+        const trimmed = item.trim();
+        if (!trimmed) {
+          return '';
+        }
+        try {
+          return JSON.parse(trimmed);
+        } catch (error) {
+          return item;
+        }
+      }
+      return item;
+    });
+  }
+  if (typeof meta !== 'object' || meta === null) {
     return {};
   }
   return Object.entries(meta).reduce((acc, [key, value]) => {
     if (value === undefined) {
       return acc;
     }
-    if (value && typeof value === 'object') {
-      acc[key] = JSON.stringify(value);
-    } else {
-      acc[key] = value;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        acc[key] = '';
+        return acc;
+      }
+      try {
+        acc[key] = JSON.parse(trimmed);
+        return acc;
+      } catch (error) {
+        acc[key] = value;
+        return acc;
+      }
     }
+    if (Array.isArray(value)) {
+      acc[key] = value.map((item) => (typeof item === 'object' ? parseMeta(item) : item));
+      return acc;
+    }
+    if (typeof value === 'object' && value !== null) {
+      acc[key] = parseMeta(value);
+      return acc;
+    }
+    acc[key] = value;
     return acc;
   }, {});
+}
+
+function serialiseMeta(meta) {
+  if (typeof meta === 'string') {
+    const trimmed = meta.trim();
+    if (!trimmed) {
+      return JSON.stringify({});
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      return serialiseMeta(parsed);
+    } catch (error) {
+      return JSON.stringify({});
+    }
+  }
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    return JSON.stringify({});
+  }
+  try {
+    return JSON.stringify(meta);
+  } catch (error) {
+    return JSON.stringify({});
+  }
 }
 
 function extractNode(recordNode) {
