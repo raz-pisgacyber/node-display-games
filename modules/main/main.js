@@ -10,8 +10,11 @@ import ReactFlow, {
 } from 'https://esm.sh/reactflow@11?deps=react@18,react-dom@18&dev';
 
 const AUTOSAVE_DELAY = 1600;
-const VERSION_INTERVAL = 6000;
+const DEFAULT_VERSION_INTERVAL = 6000;
 const API_BASE = '/api';
+const PROJECT_STORAGE_KEY = 'story-graph-project';
+const SESSION_STORAGE_PREFIX = 'story-graph-session:';
+const USER_ID_STORAGE_KEY = 'story-graph-user-id';
 
 function stableStringify(value) {
   if (Array.isArray(value)) {
@@ -56,25 +59,48 @@ async function fetchJSON(url, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function getOrCreateSession() {
-  const key = 'story-graph-session';
+function normaliseProjectId(value, fallback) {
+  const trimmed = (value || '').trim();
+  return trimmed || fallback;
+}
+
+function determineProjectId(config) {
+  const defaultId = config?.default_project_id || 'default_project';
+  const params = new URLSearchParams(window.location.search);
+  const queryValue = params.get('project') || params.get('project_id');
+  const stored = window.localStorage.getItem(PROJECT_STORAGE_KEY);
+  const finalId = normaliseProjectId(queryValue, normaliseProjectId(stored, defaultId));
+  window.localStorage.setItem(PROJECT_STORAGE_KEY, finalId);
+  return finalId;
+}
+
+function getOrCreateUserId() {
+  const existing = window.localStorage.getItem(USER_ID_STORAGE_KEY);
+  if (existing) return existing;
+  const userId = `guest_${Math.random().toString(36).slice(2, 10)}`;
+  window.localStorage.setItem(USER_ID_STORAGE_KEY, userId);
+  return userId;
+}
+
+async function getOrCreateSession(projectId) {
+  const key = `${SESSION_STORAGE_PREFIX}${projectId}`;
   const cached = window.localStorage.getItem(key);
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
-      if (parsed?.id) {
+      if (parsed?.id && parsed?.project_id === projectId) {
         return parsed;
       }
     } catch (err) {
       console.warn('Failed to parse cached session', err);
     }
   }
-  const userId = `guest_${Math.random().toString(36).slice(2, 10)}`;
+  const userId = getOrCreateUserId();
   const created = await fetchJSON(`${API_BASE}/sessions`, {
     method: 'POST',
-    body: { user_id: userId },
+    body: { user_id: userId, project_id: projectId },
   });
-  const stored = { ...created, user_id: userId };
+  const stored = { ...created, user_id: userId, project_id: projectId };
   window.localStorage.setItem(key, JSON.stringify(stored));
   return stored;
 }
@@ -111,6 +137,9 @@ function stringifyMetaValue(value) {
 }
 
 function App() {
+  const [appConfig, setAppConfig] = useState(null);
+  const [configError, setConfigError] = useState(null);
+  const [projectId, setProjectId] = useState(null);
   const [session, setSession] = useState(null);
   const [sessionError, setSessionError] = useState(null);
   const [graphNodes, setGraphNodes] = useState([]);
@@ -141,8 +170,58 @@ function App() {
   );
 
   useEffect(() => {
+    if (!projectId) return;
+    initialisedPositions.current = new Set();
+    setGraphNodes([]);
+    setGraphEdges([]);
+    setNodes([]);
+    setEdges([]);
+    setSelectedNodeId(null);
+    setDraftNode(null);
+    setMessages([]);
+    setNewMessage('');
+    setSummary(null);
+    setSummaryDraft('');
+    setCheckpoints([]);
+    setAutosaveState('idle');
+    setIsDirty(false);
+    setErrorBanner(null);
+    versionCursor.current = null;
+  }, [projectId, setNodes, setEdges]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchJSON(`${API_BASE}/config`)
+      .then((data) => {
+        if (!cancelled) {
+          setAppConfig(data || {});
+          setConfigError(null);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) {
+          setAppConfig({});
+          setConfigError(err.message);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!appConfig) return;
+    const derivedProjectId = determineProjectId(appConfig);
+    setProjectId(derivedProjectId);
+  }, [appConfig]);
+
+  useEffect(() => {
+    if (!projectId) return undefined;
     let mounted = true;
-    getOrCreateSession()
+    setSession(null);
+    setSessionError(null);
+    getOrCreateSession(projectId)
       .then((data) => {
         if (mounted) setSession(data);
       })
@@ -153,11 +232,13 @@ function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [projectId]);
 
   const loadGraph = useCallback(async () => {
+    if (!projectId) return;
     try {
-      const data = await fetchJSON(`${API_BASE}/graph`);
+      const params = new URLSearchParams({ project_id: projectId });
+      const data = await fetchJSON(`${API_BASE}/graph?${params.toString()}`);
       setGraphNodes(data.nodes || []);
       setGraphEdges(data.edges || []);
       versionCursor.current = new Date().toISOString();
@@ -166,13 +247,17 @@ function App() {
       console.error(error);
       setErrorBanner(error?.message || 'Failed to load graph');
     }
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
     loadGraph();
   }, [loadGraph]);
 
   useEffect(() => {
+    if (!projectId) {
+      setNodes([]);
+      return;
+    }
     setNodes(
       graphNodes.map((node, index) => {
         const position = node.meta?.position;
@@ -190,7 +275,7 @@ function App() {
             );
             fetchJSON(`${API_BASE}/node/${node.id}`, {
               method: 'PATCH',
-              body: { meta: metaUpdates },
+              body: { meta: metaUpdates, project_id: projectId },
             }).catch((err) => console.warn('Failed to seed node position', err));
           }
         }
@@ -201,7 +286,7 @@ function App() {
         };
       })
     );
-  }, [graphNodes, setNodes]);
+  }, [graphNodes, setNodes, projectId]);
 
   useEffect(() => {
     setEdges(
@@ -239,7 +324,7 @@ function App() {
   }, [session, selectedNodeId]);
 
   useEffect(() => {
-    if (!draftNode || !selectedNode || !isDirty) {
+    if (!draftNode || !selectedNode || !isDirty || !projectId) {
       return undefined;
     }
     setAutosaveState('saving');
@@ -262,6 +347,7 @@ function App() {
         setIsDirty(false);
         return;
       }
+      payload.project_id = projectId;
       try {
         const updated = await fetchJSON(`${API_BASE}/node/${draftNode.id}`, {
           method: 'PATCH',
@@ -281,16 +367,16 @@ function App() {
         clearTimeout(autosaveHandle.current);
       }
     };
-  }, [draftNode, selectedNode, isDirty]);
+  }, [draftNode, selectedNode, isDirty, projectId]);
 
   useEffect(() => {
-    if (!session) return undefined;
+    if (!session || !projectId) return undefined;
+    const pollInterval = appConfig?.version_poll_interval_ms || DEFAULT_VERSION_INTERVAL;
     const interval = setInterval(async () => {
       if (!versionCursor.current) return;
+      const params = new URLSearchParams({ project_id: projectId, since: versionCursor.current });
       try {
-        const data = await fetchJSON(
-          `${API_BASE}/versions/check?since=${encodeURIComponent(versionCursor.current)}`
-        );
+        const data = await fetchJSON(`${API_BASE}/versions/check?${params.toString()}`);
         versionCursor.current = new Date().toISOString();
         if (data?.versions?.length) {
           await loadGraph();
@@ -298,9 +384,9 @@ function App() {
       } catch (error) {
         console.warn('Version check failed', error);
       }
-    }, VERSION_INTERVAL);
+    }, pollInterval);
     return () => clearInterval(interval);
-  }, [session, loadGraph]);
+  }, [session, loadGraph, projectId, appConfig]);
 
   const refreshMessages = useCallback(async () => {
     if (!session) return;
@@ -337,10 +423,12 @@ function App() {
   }, [session]);
 
   useEffect(() => {
-    fetchJSON(`${API_BASE}/checkpoints`)
+    if (!projectId) return;
+    const params = new URLSearchParams({ project_id: projectId });
+    fetchJSON(`${API_BASE}/checkpoints?${params.toString()}`)
       .then((data) => setCheckpoints(data.checkpoints || []))
       .catch((error) => console.warn('Failed to load checkpoints', error));
-  }, []);
+  }, [projectId]);
 
   const handleNodesChange = useCallback(
     (changes) => {
@@ -352,6 +440,7 @@ function App() {
         }
       });
       if (updates.length) {
+        if (!projectId) return;
         setGraphNodes((prev) =>
           prev.map((node) => {
             const update = updates.find((item) => item.id === node.id);
@@ -385,7 +474,7 @@ function App() {
               : { position: update.position };
             return fetchJSON(`${API_BASE}/node/${update.id}`, {
               method: 'PATCH',
-              body: { meta: baseMeta },
+              body: { meta: baseMeta, project_id: projectId },
             });
           })
         )
@@ -403,15 +492,21 @@ function App() {
           });
       }
     },
-    [onNodesChangeBase, draftNode, graphNodes, isDirty]
+    [onNodesChangeBase, draftNode, graphNodes, isDirty, projectId]
   );
 
   const handleConnect = useCallback(
     async (connection) => {
+      if (!projectId) return;
       try {
         const created = await fetchJSON(`${API_BASE}/edge`, {
           method: 'POST',
-          body: { from: connection.source, to: connection.target, type: connection.type || 'LINKS_TO' },
+          body: {
+            from: connection.source,
+            to: connection.target,
+            type: connection.type || 'LINKS_TO',
+            project_id: projectId,
+          },
         });
         setGraphEdges((prev) => [...prev, created]);
         setEdges((eds) => addEdge(connection, eds));
@@ -420,10 +515,11 @@ function App() {
         setErrorBanner(error?.message || 'Request failed');
       }
     },
-    [setEdges]
+    [setEdges, projectId]
   );
 
   const handleAddNode = useCallback(async () => {
+    if (!projectId) return;
     const label = window.prompt('Node label', 'New Story Node');
     if (!label) return;
     const position = {
@@ -433,7 +529,7 @@ function App() {
     try {
       const created = await fetchJSON(`${API_BASE}/node`, {
         method: 'POST',
-        body: { label, content: '', meta: { position } },
+        body: { label, content: '', meta: { position }, project_id: projectId },
       });
       setGraphNodes((prev) => [...prev, created]);
       setSelectedNodeId(created.id);
@@ -441,15 +537,18 @@ function App() {
       console.error(error);
       setErrorBanner(error?.message || 'Request failed');
     }
-  }, [graphNodes.length]);
+  }, [graphNodes.length, projectId]);
 
   const handleDeleteNode = useCallback(async () => {
-    if (!selectedNode) return;
+    if (!selectedNode || !projectId) return;
     if (!window.confirm(`Delete node "${selectedNode.label || selectedNode.id}"?`)) {
       return;
     }
     try {
-      await fetchJSON(`${API_BASE}/node/${selectedNode.id}`, { method: 'DELETE' });
+      await fetchJSON(`${API_BASE}/node/${selectedNode.id}`, {
+        method: 'DELETE',
+        body: { project_id: projectId },
+      });
       setGraphNodes((prev) => prev.filter((node) => node.id !== selectedNode.id));
       setGraphEdges((prev) => prev.filter((edge) => edge.from !== selectedNode.id && edge.to !== selectedNode.id));
       setSelectedNodeId(null);
@@ -457,20 +556,24 @@ function App() {
       console.error(error);
       setErrorBanner(error?.message || 'Request failed');
     }
-  }, [selectedNode]);
+  }, [selectedNode, projectId]);
 
-  const handleDeleteEdge = useCallback(async (edge) => {
-    try {
-      await fetchJSON(`${API_BASE}/edge`, {
-        method: 'DELETE',
-        body: { from: edge.from, to: edge.to, type: edge.type },
-      });
-      setGraphEdges((prev) => prev.filter((item) => item !== edge));
-    } catch (error) {
-      console.error(error);
-      setErrorBanner(error.message);
-    }
-  }, []);
+  const handleDeleteEdge = useCallback(
+    async (edge) => {
+      if (!projectId) return;
+      try {
+        await fetchJSON(`${API_BASE}/edge`, {
+          method: 'DELETE',
+          body: { from: edge.from, to: edge.to, type: edge.type, project_id: projectId },
+        });
+        setGraphEdges((prev) => prev.filter((item) => item !== edge));
+      } catch (error) {
+        console.error(error);
+        setErrorBanner(error.message);
+      }
+    },
+    [projectId]
+  );
 
   const handleMessageSubmit = useCallback(
     async (event) => {
@@ -518,39 +621,42 @@ function App() {
   }, [session, summaryDraft, selectedNodeId, messages.length]);
 
   const handleSaveCheckpoint = useCallback(async () => {
+    if (!projectId) return;
     const name = checkpointName.trim();
     if (!name) return;
     try {
       await fetchJSON(`${API_BASE}/checkpoints`, {
         method: 'POST',
-        body: { name },
+        body: { name, project_id: projectId },
       });
       setCheckpointName('');
-      const refreshed = await fetchJSON(`${API_BASE}/checkpoints`);
+      const params = new URLSearchParams({ project_id: projectId });
+      const refreshed = await fetchJSON(`${API_BASE}/checkpoints?${params.toString()}`);
       setCheckpoints(refreshed.checkpoints || []);
     } catch (error) {
       console.error(error);
       setErrorBanner(error?.message || 'Request failed');
     }
-  }, [checkpointName]);
+  }, [checkpointName, projectId]);
 
   const handleRestoreCheckpoint = useCallback(
     async (checkpointId) => {
-      if (!checkpointId) return;
+      if (!checkpointId || !projectId) return;
       if (!window.confirm('Restore checkpoint? Current graph will be replaced.')) {
         return;
       }
       try {
         await fetchJSON(`${API_BASE}/checkpoints/${checkpointId}/restore`, { method: 'POST' });
         await loadGraph();
-        const refreshed = await fetchJSON(`${API_BASE}/checkpoints`);
+        const params = new URLSearchParams({ project_id: projectId });
+        const refreshed = await fetchJSON(`${API_BASE}/checkpoints?${params.toString()}`);
         setCheckpoints(refreshed.checkpoints || []);
       } catch (error) {
         console.error(error);
         setErrorBanner(error?.message || 'Request failed');
       }
     },
-    [loadGraph]
+    [loadGraph, projectId]
   );
 
   const connectedEdges = useMemo(
@@ -581,7 +687,9 @@ function App() {
           <span>Visual editor with live Neo4j + MySQL sync</span>
         </div>
         <div className="header-actions">
-          <button type="button" onClick={handleAddNode}>Add node</button>
+          <button type="button" onClick={handleAddNode} disabled={!projectId}>
+            Add node
+          </button>
           <div className="status-indicator" aria-live="polite">
             <span className={`status-dot ${autosaveState}`}></span>
             <span>{statusLabel}</span>
@@ -619,6 +727,18 @@ function App() {
       <aside className="sidebar">
         <div className="panel">
           <h2>Session</h2>
+          {projectId && (
+            <div className="field">
+              <label>Project</label>
+              <div>{projectId}</div>
+            </div>
+          )}
+          {configError && (
+            <div className="summary-banner" style={{ backgroundColor: '#fce8e6' }}>
+              <h3>Configuration warning</h3>
+              <p>{configError}</p>
+            </div>
+          )}
           {sessionError && <div className="empty-state">{sessionError}</div>}
           {session && (
             <div className="field">

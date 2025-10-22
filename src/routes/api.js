@@ -16,17 +16,36 @@ function ensureObject(value) {
   return value;
 }
 
+router.get('/config', (req, res) => {
+  res.json({
+    default_project_id: config.defaults.projectId,
+    version_poll_interval_ms: config.defaults.versionPollIntervalMs,
+  });
+});
+
 router.get('/graph', async (req, res, next) => {
+  const projectId = (req.query?.project_id || config.defaults.projectId).toString();
   const session = driver.session({ defaultAccessMode: neo4j.session.READ });
   try {
     const result = await session.run(
       `MATCH (n:ProjectNode)
+       WHERE coalesce(n.project_id, $projectId) = $projectId
+       SET n.project_id = coalesce(n.project_id, $projectId)
+       WITH n
        OPTIONAL MATCH (n)-[r]->(m:ProjectNode)
+       WHERE coalesce(m.project_id, $projectId) = $projectId
        RETURN collect(DISTINCT n) AS nodes,
-              collect(DISTINCT {from: n.id, to: m.id, type: type(r), props: properties(r)}) AS edges`
+              collect(DISTINCT {from: n.id, to: m.id, type: type(r), props: properties(r)}) AS edges`,
+      { projectId }
     );
     const record = result.records[0];
-    const nodes = (record?.get('nodes') || []).map((node) => extractNode(node));
+    const nodes = (record?.get('nodes') || []).map((node) => {
+      const extracted = extractNode(node);
+      if (!extracted.project_id) {
+        extracted.project_id = projectId;
+      }
+      return extracted;
+    });
     const edges = (record?.get('edges') || [])
       .filter((edge) => edge && edge.from && edge.to)
       .map((edge) => ({
@@ -34,6 +53,7 @@ router.get('/graph', async (req, res, next) => {
         to: edge.to,
         type: edge.type || 'LINKS_TO',
         props: edge.props || {},
+        project_id: projectId,
       }));
     res.json({ nodes, edges });
   } catch (error) {
@@ -44,7 +64,13 @@ router.get('/graph', async (req, res, next) => {
 });
 
 router.post('/node', async (req, res, next) => {
-  const { id, label, content = '', meta = {} } = req.body || {};
+  const {
+    id,
+    label,
+    content = '',
+    meta = {},
+    project_id: projectIdInput,
+  } = req.body || {};
   if (!label) {
     res.status(400).json({ error: 'label is required' });
     return;
@@ -52,19 +78,20 @@ router.post('/node', async (req, res, next) => {
   const nodeId = id || uuidv4();
   const metaData = ensureObject(meta);
   const { versionId, lastModified } = newVersionMeta();
+  const projectId = (projectIdInput || config.defaults.projectId).toString();
   const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
   try {
     const result = await session.writeTransaction((tx) =>
       tx.run(
-        `CREATE (n:ProjectNode {id: $id, label: $label, content: $content, meta: $meta, version_id: $versionId, last_modified: datetime($lastModified)})
+        `CREATE (n:ProjectNode {id: $id, project_id: $projectId, label: $label, content: $content, meta: $meta, version_id: $versionId, last_modified: datetime($lastModified)})
          RETURN n`,
-        { id: nodeId, label, content, meta: metaData, versionId, lastModified }
+        { id: nodeId, projectId, label, content, meta: metaData, versionId, lastModified }
       )
     );
     const node = extractNode(result.records[0].get('n'));
     const connection = await pool.getConnection();
     try {
-      await upsertNodeVersion(connection, node);
+      await upsertNodeVersion(connection, { ...node, project_id: projectId });
     } finally {
       connection.release();
     }
@@ -78,7 +105,7 @@ router.post('/node', async (req, res, next) => {
 
 router.patch('/node/:id', async (req, res, next) => {
   const { id } = req.params;
-  const { label, content, meta: metaReplace, metaUpdates } = req.body || {};
+  const { label, content, meta: metaReplace, metaUpdates, project_id: projectIdInput } = req.body || {};
   const coreUpdates = {};
   if (label !== undefined) coreUpdates.label = label;
   if (content !== undefined) coreUpdates.content = content;
@@ -88,6 +115,8 @@ router.patch('/node/:id', async (req, res, next) => {
   const metaUpdateObject = ensureObject(metaUpdates);
   const hasMetaUpdates = !hasMetaReplace && Object.keys(metaUpdateObject).length > 0;
 
+  const projectId = (projectIdInput || req.query?.project_id || config.defaults.projectId).toString();
+
   if (!hasCore && !hasMetaReplace && !hasMetaUpdates) {
     res.status(400).json({ error: 'No updates provided' });
     return;
@@ -96,7 +125,7 @@ router.patch('/node/:id', async (req, res, next) => {
   const { versionId, lastModified } = newVersionMeta();
   const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
   try {
-    const parts = ['MATCH (n:ProjectNode {id: $id})'];
+    const parts = ['MATCH (n:ProjectNode {id: $id})', 'WHERE coalesce(n.project_id, $projectId) = $projectId', 'SET n.project_id = $projectId'];
     if (hasCore) {
       parts.push('SET n += $core');
     }
@@ -112,6 +141,7 @@ router.patch('/node/:id', async (req, res, next) => {
       id,
       lastModified,
       versionId,
+      projectId,
     };
     if (hasCore) {
       params.core = coreUpdates;
@@ -130,7 +160,7 @@ router.patch('/node/:id', async (req, res, next) => {
     const node = extractNode(result.records[0].get('n'));
     const connection = await pool.getConnection();
     try {
-      await upsertNodeVersion(connection, node);
+      await upsertNodeVersion(connection, { ...node, project_id: projectId });
     } finally {
       connection.release();
     }
@@ -144,10 +174,21 @@ router.patch('/node/:id', async (req, res, next) => {
 
 router.delete('/node/:id', async (req, res, next) => {
   const { id } = req.params;
+  const projectId = (req.body?.project_id || req.query?.project_id || config.defaults.projectId).toString();
   const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
   try {
     const result = await session.writeTransaction((tx) =>
-      tx.run('MATCH (n:ProjectNode {id: $id}) DETACH DELETE n RETURN count(n) AS deleted', { id })
+      tx.run(
+        `MATCH (n:ProjectNode {id: $id})
+         WHERE coalesce(n.project_id, $projectId) = $projectId
+         WITH n
+         DETACH DELETE n
+         RETURN count(n) AS deleted`,
+        {
+          id,
+          projectId,
+        }
+      )
     );
     const deleted = result.records[0].get('deleted');
     if (!deleted) {
@@ -156,7 +197,7 @@ router.delete('/node/:id', async (req, res, next) => {
     }
     const connection = await pool.getConnection();
     try {
-      await deleteNodeVersion(connection, id);
+      await deleteNodeVersion(connection, id, projectId);
     } finally {
       connection.release();
     }
@@ -169,21 +210,25 @@ router.delete('/node/:id', async (req, res, next) => {
 });
 
 router.post('/edge', async (req, res, next) => {
-  const { from, to, type, props = {} } = req.body || {};
+  const { from, to, type, props = {}, project_id: projectIdInput } = req.body || {};
   if (!from || !to) {
     res.status(400).json({ error: 'from and to are required' });
     return;
   }
   const relationshipType = validateRelationshipType(type);
+  const projectId = (projectIdInput || config.defaults.projectId).toString();
   const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
   try {
     const result = await session.writeTransaction((tx) =>
       tx.run(
         `MATCH (a:ProjectNode {id: $from}), (b:ProjectNode {id: $to})
+         WHERE coalesce(a.project_id, $projectId) = $projectId AND coalesce(b.project_id, $projectId) = $projectId
+         SET a.project_id = coalesce(a.project_id, $projectId)
+         SET b.project_id = coalesce(b.project_id, $projectId)
          CREATE (a)-[r:${relationshipType}]->(b)
          SET r += $props
-         RETURN {from: a.id, to: b.id, type: type(r), props: properties(r)} AS edge`,
-        { from, to, props }
+         RETURN {from: a.id, to: b.id, type: type(r), props: properties(r), project_id: $projectId} AS edge`,
+        { from, to, props, projectId }
       )
     );
     if (result.records.length === 0) {
@@ -199,21 +244,23 @@ router.post('/edge', async (req, res, next) => {
 });
 
 router.delete('/edge', async (req, res, next) => {
-  const { from, to, type } = req.body || {};
+  const { from, to, type, project_id: projectIdInput } = req.body || {};
   if (!from || !to) {
     res.status(400).json({ error: 'from and to are required' });
     return;
   }
   const relationshipType = validateRelationshipType(type);
+  const projectId = (projectIdInput || config.defaults.projectId).toString();
   const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
   try {
     const result = await session.writeTransaction((tx) =>
       tx.run(
         `MATCH (a:ProjectNode {id: $from})-[r:${relationshipType}]->(b:ProjectNode {id: $to})
+         WHERE coalesce(a.project_id, $projectId) = $projectId AND coalesce(b.project_id, $projectId) = $projectId
          WITH r
          DELETE r
          RETURN count(*) AS deleted`,
-        { from, to }
+        { from, to, projectId }
       )
     );
     const deleted = result.records[0].get('deleted');
@@ -231,15 +278,17 @@ router.delete('/edge', async (req, res, next) => {
 
 router.get('/versions/check', async (req, res, next) => {
   const { since } = req.query;
+  const projectId = (req.query?.project_id || config.defaults.projectId).toString();
   const session = driver.session({ defaultAccessMode: neo4j.session.READ });
   try {
     const query = since
       ? `MATCH (n:ProjectNode)
-         WHERE n.last_modified > datetime($since)
+         WHERE coalesce(n.project_id, $projectId) = $projectId AND n.last_modified > datetime($since)
          RETURN n.id AS node_id, n.version_id AS version_id, n.last_modified AS last_modified`
       : `MATCH (n:ProjectNode)
+         WHERE coalesce(n.project_id, $projectId) = $projectId
          RETURN n.id AS node_id, n.version_id AS version_id, n.last_modified AS last_modified`;
-    const params = since ? { since } : {};
+    const params = since ? { since, projectId } : { projectId };
     const result = await session.run(query, params);
     const versions = result.records.map((record) => ({
       node_id: record.get('node_id'),
@@ -346,31 +395,41 @@ router.get('/summaries', async (req, res, next) => {
 });
 
 router.post('/checkpoints', async (req, res, next) => {
-  const { project_id = config.defaults.projectId, name } = req.body || {};
+  const { project_id: projectIdInput = config.defaults.projectId, name } = req.body || {};
   if (!name) {
     res.status(400).json({ error: 'name is required' });
     return;
   }
+  const projectId = projectIdInput.toString();
   const session = driver.session({ defaultAccessMode: neo4j.session.READ });
   try {
     const result = await session.run(
       `MATCH (n:ProjectNode)
+       WHERE coalesce(n.project_id, $projectId) = $projectId
+       SET n.project_id = coalesce(n.project_id, $projectId)
+       WITH n
        OPTIONAL MATCH (n)-[r]->(m:ProjectNode)
+       WHERE coalesce(m.project_id, $projectId) = $projectId
        RETURN collect(DISTINCT n{.*, meta: n.meta}) AS nodes,
-              collect(DISTINCT {from: n.id, to: m.id, type: type(r), props: properties(r)}) AS edges`
+              collect(DISTINCT {from: n.id, to: m.id, type: type(r), props: properties(r)}) AS edges`,
+      { projectId }
     );
     const record = result.records[0];
     const snapshot = {
-      nodes: (record?.get('nodes') || []).map((node) => ({ ...node, last_modified: node.last_modified?.toString?.() || node.last_modified })),
+      nodes: (record?.get('nodes') || []).map((node) => ({
+        ...node,
+        project_id: node.project_id || projectId,
+        last_modified: node.last_modified?.toString?.() || node.last_modified,
+      })),
       edges: (record?.get('edges') || []).filter((edge) => edge && edge.from && edge.to),
     };
     const json = JSON.stringify(snapshot);
     const checksum = crypto.createHash('sha1').update(json).digest('hex');
     const [insertResult] = await pool.execute(
       `INSERT INTO checkpoints (project_id, name, json_snapshot, checksum) VALUES (?, ?, ?, ?)` ,
-      [project_id, name, json, checksum]
+      [projectId, name, json, checksum]
     );
-    res.status(201).json({ id: insertResult.insertId, project_id, name, checksum });
+    res.status(201).json({ id: insertResult.insertId, project_id: projectId, name, checksum });
   } catch (error) {
     next(error);
   } finally {
@@ -379,11 +438,11 @@ router.post('/checkpoints', async (req, res, next) => {
 });
 
 router.get('/checkpoints', async (req, res, next) => {
-  const { project_id = config.defaults.projectId } = req.query;
+  const projectId = (req.query?.project_id || config.defaults.projectId).toString();
   try {
     const [rows] = await pool.execute(
       'SELECT id, project_id, name, created_at, checksum FROM checkpoints WHERE project_id = ? ORDER BY created_at DESC',
-      [project_id]
+      [projectId]
     );
     res.json({ checkpoints: rows });
   } catch (error) {
@@ -401,20 +460,29 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
       return;
     }
     const checkpoint = rows[0];
+    const projectId = checkpoint.project_id;
     const snapshot = JSON.parse(checkpoint.json_snapshot);
     const nodes = snapshot.nodes || [];
     const edges = snapshot.edges || [];
     const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
     try {
       await session.writeTransaction(async (tx) => {
-        await tx.run('MATCH (n:ProjectNode) DETACH DELETE n');
+        await tx.run(
+          `MATCH (n:ProjectNode)
+           WHERE coalesce(n.project_id, $projectId) = $projectId
+           WITH n
+           DETACH DELETE n`,
+          { projectId }
+        );
         for (const node of nodes) {
+          if (node.project_id && node.project_id !== projectId) continue;
           const { versionId, lastModified } = newVersionMeta();
           const metaData = ensureObject(node.meta);
           await tx.run(
-            `CREATE (n:ProjectNode {id: $id, label: $label, content: $content, meta: $meta, version_id: $versionId, last_modified: datetime($lastModified)})`,
+            `CREATE (n:ProjectNode {id: $id, project_id: $projectId, label: $label, content: $content, meta: $meta, version_id: $versionId, last_modified: datetime($lastModified)})`,
             {
               id: node.id,
+              projectId,
               label: node.label || '',
               content: node.content || '',
               meta: metaData,
@@ -424,15 +492,19 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
           );
           node.version_id = versionId;
           node.last_modified = lastModified;
+          node.project_id = projectId;
         }
         for (const edge of edges) {
           if (!edge.from || !edge.to) continue;
           const relationshipType = validateRelationshipType(edge.type);
           await tx.run(
             `MATCH (a:ProjectNode {id: $from}), (b:ProjectNode {id: $to})
+             WHERE coalesce(a.project_id, $projectId) = $projectId AND coalesce(b.project_id, $projectId) = $projectId
+             SET a.project_id = coalesce(a.project_id, $projectId)
+             SET b.project_id = coalesce(b.project_id, $projectId)
              CREATE (a)-[r:${relationshipType}]->(b)
              SET r += $props`,
-            { from: edge.from, to: edge.to, props: ensureObject(edge.props) }
+            { from: edge.from, to: edge.to, props: ensureObject(edge.props), projectId }
           );
         }
       });
@@ -442,26 +514,28 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
 
     await connection.beginTransaction();
     try {
-      await connection.execute('DELETE FROM node_versions');
+      await connection.execute('DELETE FROM node_versions WHERE project_id = ?', [projectId]);
       for (const node of nodes) {
+        if (node.project_id && node.project_id !== projectId) continue;
         await upsertNodeVersion(connection, {
           id: node.id,
           meta: ensureObject(node.meta),
           version_id: node.version_id,
           last_modified: node.last_modified,
+          project_id: projectId,
         });
       }
       await connection.execute(
         `DELETE m FROM messages m JOIN sessions s ON m.session_id = s.id WHERE s.project_id = ?`,
-        [checkpoint.project_id]
+        [projectId]
       );
       await connection.execute(
         `DELETE su FROM summaries su JOIN sessions s ON su.session_id = s.id WHERE s.project_id = ?`,
-        [checkpoint.project_id]
+        [projectId]
       );
       await connection.execute(
         `UPDATE sessions SET active_node = NULL, last_sync = NULL WHERE project_id = ?`,
-        [checkpoint.project_id]
+        [projectId]
       );
       await connection.commit();
     } catch (err) {
@@ -478,17 +552,18 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
 });
 
 router.post('/sessions', async (req, res, next) => {
-  const { user_id, project_id = config.defaults.projectId, active_node = null } = req.body || {};
+  const { user_id, project_id: projectIdInput = config.defaults.projectId, active_node = null } = req.body || {};
   if (!user_id) {
     res.status(400).json({ error: 'user_id is required' });
     return;
   }
+  const projectId = projectIdInput.toString();
   try {
     const [result] = await pool.execute(
       `INSERT INTO sessions (user_id, project_id, active_node, last_sync) VALUES (?, ?, ?, NULL)` ,
-      [user_id, project_id, active_node]
+      [user_id, projectId, active_node]
     );
-    res.status(201).json({ id: result.insertId, user_id, project_id, active_node });
+    res.status(201).json({ id: result.insertId, user_id, project_id: projectId, active_node });
   } catch (error) {
     next(error);
   }

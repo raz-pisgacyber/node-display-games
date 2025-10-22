@@ -8,8 +8,8 @@ graph data in Neo4j and collaboration metadata in MySQL, while the front end is 
   via native ES module imports in the browser.
 - **API server** (`server.js`, `src/routes/api.js`): Express application that serves static assets and implements JSON endpoints for
   graph CRUD, messaging, checkpoints, summaries, and session tracking.
-- **Graph store** (`src/db/neo4j.js`): Uses the official Neo4j driver. Nodes are labelled `ProjectNode` with `id`, `label`,
-  `content`, `meta`, `version_id`, and `last_modified` properties. Relationships default to `LINKS_TO` but any validated type is
+- **Graph store** (`src/db/neo4j.js`): Uses the official Neo4j driver. Nodes are labelled `ProjectNode` with `id`,
+  `project_id`, `label`, `content`, `meta`, `version_id`, and `last_modified` properties. Relationships default to `LINKS_TO` but any validated type is
   accepted.
 - **Relational store** (`src/db/mysql.js`, `src/utils/nodeVersions.js`): Uses `mysql2/promise` for storing chat-style messages,
   summaries, checkpoints, session metadata, and a node version lookup table used to detect graph changes.
@@ -35,14 +35,18 @@ graph data in Neo4j and collaboration metadata in MySQL, while the front end is 
    the server is running (see **Smoke test** below).
 
 ### MySQL schema
-Run the following statements against your MySQL database (adjust types/engine to your provider’s defaults):
+The API initialises its own MySQL schema on startup (creating tables and, if necessary, upgrading `node_versions` to carry a
+`project_id`). If you prefer to manage the schema manually, run the following statements (adjust types/engine to your
+provider’s defaults):
 ```sql
 CREATE TABLE IF NOT EXISTS node_versions (
-  node_id VARCHAR(64) PRIMARY KEY,
+  project_id VARCHAR(64) NOT NULL,
+  node_id VARCHAR(64) NOT NULL,
   version_id VARCHAR(64) NOT NULL,
   last_modified DATETIME NOT NULL,
   meta_hash CHAR(40) NOT NULL,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (project_id, node_id)
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -52,7 +56,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   active_node VARCHAR(64) NULL,
   last_sync DATETIME NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_sessions_project (project_id)
+  INDEX idx_sessions_project (project_id),
+  INDEX idx_sessions_user_project (user_id, project_id)
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -92,7 +97,9 @@ These definitions cover every table touched by the API. Modify types/lengths if 
 > statements with `ON CONFLICT` equivalents in `src/utils/nodeVersions.js`, plus adjust any schema differences.
 
 ## Configuration
-All runtime configuration is read from environment variables (see `src/config.js`). Provide them before starting the server:
+All runtime configuration is read from environment variables (see `src/config.js`). A `.env` file in the repository root is
+loaded automatically at startup (set `APP_ENV_FILE` to point elsewhere, or `LOAD_ENV=false` to opt out). You can still export
+values manually if you prefer.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -109,23 +116,21 @@ All runtime configuration is read from environment variables (see `src/config.js
 | `DEFAULT_PROJECT_ID` | Project id attached to sessions/checkpoints | `default_project` |
 | `VERSION_POLL_INTERVAL_MS` | Client poll interval for version checks | `5000` |
 
-You can store these in a shell script or `.env` file and export them before running `npm start`.
-
 ## Running the project locally
 1. Install dependencies:
    ```bash
    npm install
    ```
-2. Export environment variables for your databases:
-   ```bash
-   export NEO4J_URI="neo4j+s://<bolt-host>:7687"
-   export NEO4J_USER="neo4j"
-   export NEO4J_PASSWORD="<neo4j-password>"
-   export MYSQL_HOST="<mysql-host>"
-   export MYSQL_PORT="3306"
-   export MYSQL_USER="<mysql-user>"
-   export MYSQL_PASSWORD="<mysql-password>"
-   export MYSQL_DATABASE="<schema-name>"
+2. Create a `.env` file (or export the variables manually) with your connection details:
+   ```env
+   NEO4J_URI=neo4j+s://<bolt-host>:7687
+   NEO4J_USER=neo4j
+   NEO4J_PASSWORD=<neo4j-password>
+   MYSQL_HOST=<mysql-host>
+   MYSQL_PORT=3306
+   MYSQL_USER=<mysql-user>
+   MYSQL_PASSWORD=<mysql-password>
+   MYSQL_DATABASE=<schema-name>
    ```
 3. Start the server:
    ```bash
@@ -149,6 +154,16 @@ curl http://localhost:8080/api/graph
 ```
 If the health check fails, confirm that your credentials are correct and that remote database firewalls allow connections from
 this machine.
+
+## Multi-project & multi-user behaviour
+- Graph data is namespaced by `project_id` inside Neo4j. Relational tables (`node_versions`, `sessions`, `messages`,
+  `summaries`, and `checkpoints`) also record the project so multiple projects can coexist in the same databases.
+- The browser UI determines the active project in this order: the `?project=` (or `project_id=`) query parameter, the last
+  value stored in `localStorage`, and finally the server’s `DEFAULT_PROJECT_ID` configuration.
+- Append `?project=<your-project>` to `http://localhost:8080/` to open or create an isolated project. Each project keeps its
+  own sessions, checkpoints, summaries, and message history.
+- User sessions are stored per project, so multiple users can collaborate by sharing the same project identifier while keeping
+  their own session IDs.
 
 ## Deploying against hosted databases
 When pointing to managed services (Neo4j Aura, Aiven/PlanetScale, etc.):

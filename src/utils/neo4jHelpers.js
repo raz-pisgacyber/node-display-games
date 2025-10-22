@@ -10,6 +10,7 @@ function extractNode(recordNode) {
     label: properties.label || '',
     content: properties.content || '',
     meta,
+    project_id: properties.project_id || null,
     last_modified: formatNeo4jDate(lastModified),
     version_id: properties.version_id,
   };

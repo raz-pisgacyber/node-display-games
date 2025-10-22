@@ -1,4 +1,18 @@
+const fs = require('fs');
+const path = require('path');
+const dotenv = require('dotenv');
+
 const DEFAULT_PROJECT_ID = 'default_project';
+
+const envFile = process.env.APP_ENV_FILE
+  ? path.resolve(process.cwd(), process.env.APP_ENV_FILE)
+  : path.resolve(process.cwd(), '.env');
+
+if (process.env.LOAD_ENV !== 'false') {
+  if (fs.existsSync(envFile)) {
+    dotenv.config({ path: envFile });
+  }
+}
 
 module.exports = {
   port: parseInt(process.env.PORT || '8080', 10),
