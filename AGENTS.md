@@ -22,3 +22,8 @@
 - Shutdown hooks should close both Neo4j and MySQL connections (see `server.js`). Maintain this behavior if you extend the server lifecycle.
 - Health checking is served via `GET /api/health` which probes both databases—use this to validate configuration in new environments.
 - Static content assumes the repository root as the web root; keep relative paths stable when reorganizing modules.
+
+## Additional Rules
+
+- Agents must always read the current README.md and understand the repository structure and configuration before performing any task.
+- After completing any action or producing output, agents must update the agent_history file with a summary of what was done.
