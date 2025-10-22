@@ -35,3 +35,8 @@
   - Served the main module directory as a static root so `style.css` and `main.js` resolve without 404s or incorrect MIME types.
   - Added a lightweight `/favicon.ico` handler to suppress unnecessary 404 errors in the browser console.
 - Follow-ups: Consider providing a branded favicon asset in the future.
+
+## 2025-10-22
+- Replaced the React/ReactFlow-based main workspace with a standalone vanilla JS implementation so the UI loads without external CDNs.
+- Implemented an SVG-based graph canvas with drag-to-position, edge management, and inspector/editing panels powered by native DOM state.
+- Added console logging for successful MySQL schema initialisation and Neo4j connectivity checks, and gated startup on both services.
