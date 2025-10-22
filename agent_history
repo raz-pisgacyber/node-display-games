@@ -28,3 +28,10 @@
   - Rebuilt the elements builder start state so the canvas is empty until the user creates an element; new nodes arrange in a centered grid and the viewport recenters on the first addition.
   - Refined marble styling/contrast to stay legible at varied zoom levels.
 - Follow-ups: None noted.
+
+## 2025-10-20 12:05 UTC
+- Files modified: `server.js`.
+- Completed tasks:
+  - Served the main module directory as a static root so `style.css` and `main.js` resolve without 404s or incorrect MIME types.
+  - Added a lightweight `/favicon.ico` handler to suppress unnecessary 404 errors in the browser console.
+- Follow-ups: Consider providing a branded favicon asset in the future.
