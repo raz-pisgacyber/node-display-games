@@ -1,12 +1,16 @@
 const express = require('express');
-const neo4j = require('neo4j-driver');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 
 const config = require('../config');
-const { driver } = require('../db/neo4j');
+const { getReadSession, getWriteSession } = require('../db/neo4j');
 const { pool } = require('../db/mysql');
-const { extractNode, newVersionMeta, validateRelationshipType } = require('../utils/neo4jHelpers');
+const {
+  extractNode,
+  newVersionMeta,
+  validateRelationshipType,
+  serialiseMeta,
+} = require('../utils/neo4jHelpers');
 const { upsertNodeVersion, deleteNodeVersion } = require('../utils/nodeVersions');
 
 const router = express.Router();
@@ -14,6 +18,22 @@ const router = express.Router();
 function ensureObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value;
+}
+
+function sanitiseMeta(meta) {
+  return serialiseMeta(meta);
+}
+
+function parseLimitParam(value, defaultValue, maxValue) {
+  const rawFallback = Number.isInteger(defaultValue) ? defaultValue : parseInt(`${defaultValue}`, 10) || 0;
+  const fallback = rawFallback > 0 ? rawFallback : 1;
+  const parsed = parseInt(value ?? fallback, 10);
+  const safe = Number.isNaN(parsed) ? fallback : parsed;
+  const positive = safe < 1 ? fallback : safe;
+  if (maxValue === undefined) {
+    return positive;
+  }
+  return Math.min(positive, maxValue);
 }
 
 router.get('/config', (req, res) => {
@@ -25,7 +45,7 @@ router.get('/config', (req, res) => {
 
 router.get('/graph', async (req, res, next) => {
   const projectId = (req.query?.project_id || config.defaults.projectId).toString();
-  const session = driver.session({ defaultAccessMode: neo4j.session.READ });
+  const session = getWriteSession();
   try {
     const result = await session.run(
       `MATCH (n:ProjectNode)
@@ -76,10 +96,10 @@ router.post('/node', async (req, res, next) => {
     return;
   }
   const nodeId = id || uuidv4();
-  const metaData = ensureObject(meta);
+  const metaData = sanitiseMeta(meta);
   const { versionId, lastModified } = newVersionMeta();
   const projectId = (projectIdInput || config.defaults.projectId).toString();
-  const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
+  const session = getWriteSession();
   try {
     const result = await session.writeTransaction((tx) =>
       tx.run(
@@ -112,7 +132,8 @@ router.patch('/node/:id', async (req, res, next) => {
 
   const hasCore = Object.keys(coreUpdates).length > 0;
   const hasMetaReplace = metaReplace !== undefined;
-  const metaUpdateObject = ensureObject(metaUpdates);
+  const metaReplaceObject = hasMetaReplace ? sanitiseMeta(metaReplace) : {};
+  const metaUpdateObject = sanitiseMeta(metaUpdates);
   const hasMetaUpdates = !hasMetaReplace && Object.keys(metaUpdateObject).length > 0;
 
   const projectId = (projectIdInput || req.query?.project_id || config.defaults.projectId).toString();
@@ -123,7 +144,7 @@ router.patch('/node/:id', async (req, res, next) => {
   }
 
   const { versionId, lastModified } = newVersionMeta();
-  const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
+  const session = getWriteSession();
   try {
     const parts = ['MATCH (n:ProjectNode {id: $id})', 'WHERE coalesce(n.project_id, $projectId) = $projectId', 'SET n.project_id = $projectId'];
     if (hasCore) {
@@ -147,7 +168,7 @@ router.patch('/node/:id', async (req, res, next) => {
       params.core = coreUpdates;
     }
     if (hasMetaReplace) {
-      params.metaReplace = ensureObject(metaReplace);
+      params.metaReplace = metaReplaceObject;
     }
     if (hasMetaUpdates) {
       params.metaUpdates = metaUpdateObject;
@@ -175,7 +196,7 @@ router.patch('/node/:id', async (req, res, next) => {
 router.delete('/node/:id', async (req, res, next) => {
   const { id } = req.params;
   const projectId = (req.body?.project_id || req.query?.project_id || config.defaults.projectId).toString();
-  const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
+  const session = getWriteSession();
   try {
     const result = await session.writeTransaction((tx) =>
       tx.run(
@@ -217,7 +238,7 @@ router.post('/edge', async (req, res, next) => {
   }
   const relationshipType = validateRelationshipType(type);
   const projectId = (projectIdInput || config.defaults.projectId).toString();
-  const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
+  const session = getWriteSession();
   try {
     const result = await session.writeTransaction((tx) =>
       tx.run(
@@ -251,7 +272,7 @@ router.delete('/edge', async (req, res, next) => {
   }
   const relationshipType = validateRelationshipType(type);
   const projectId = (projectIdInput || config.defaults.projectId).toString();
-  const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
+  const session = getWriteSession();
   try {
     const result = await session.writeTransaction((tx) =>
       tx.run(
@@ -279,7 +300,7 @@ router.delete('/edge', async (req, res, next) => {
 router.get('/versions/check', async (req, res, next) => {
   const { since } = req.query;
   const projectId = (req.query?.project_id || config.defaults.projectId).toString();
-  const session = driver.session({ defaultAccessMode: neo4j.session.READ });
+  const session = getReadSession();
   try {
     const query = since
       ? `MATCH (n:ProjectNode)
@@ -331,7 +352,7 @@ router.get('/messages', async (req, res, next) => {
     res.status(400).json({ error: 'session_id is required' });
     return;
   }
-  const cappedLimit = Math.min(parseInt(limit, 10) || 50, 200);
+  const cappedLimit = parseLimitParam(limit, 50, 200);
   const params = [session_id];
   let sql = 'SELECT * FROM messages WHERE session_id = ?';
   if (node_id) {
@@ -376,7 +397,7 @@ router.get('/summaries', async (req, res, next) => {
     res.status(400).json({ error: 'session_id is required' });
     return;
   }
-  const cappedLimit = Math.min(parseInt(limit, 10) || 1, 100);
+  const cappedLimit = parseLimitParam(limit, 1, 100);
   try {
     const [rows] = await pool.execute(
       'SELECT * FROM summaries WHERE session_id = ? ORDER BY created_at DESC LIMIT ?',
@@ -401,7 +422,7 @@ router.post('/checkpoints', async (req, res, next) => {
     return;
   }
   const projectId = projectIdInput.toString();
-  const session = driver.session({ defaultAccessMode: neo4j.session.READ });
+  const session = getWriteSession();
   try {
     const result = await session.run(
       `MATCH (n:ProjectNode)
@@ -464,7 +485,7 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
     const snapshot = JSON.parse(checkpoint.json_snapshot);
     const nodes = snapshot.nodes || [];
     const edges = snapshot.edges || [];
-    const session = driver.session({ defaultAccessMode: neo4j.session.WRITE });
+    const session = getWriteSession();
     try {
       await session.writeTransaction(async (tx) => {
         await tx.run(
@@ -477,7 +498,7 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
         for (const node of nodes) {
           if (node.project_id && node.project_id !== projectId) continue;
           const { versionId, lastModified } = newVersionMeta();
-          const metaData = ensureObject(node.meta);
+          const metaData = sanitiseMeta(node.meta);
           await tx.run(
             `CREATE (n:ProjectNode {id: $id, project_id: $projectId, label: $label, content: $content, meta: $meta, version_id: $versionId, last_modified: datetime($lastModified)})`,
             {
@@ -603,15 +624,31 @@ router.patch('/sessions/:id', async (req, res, next) => {
 });
 
 router.get('/health', async (req, res) => {
+  const status = { mysql: 'ok', neo4j: 'ok' };
+  let session;
   try {
     await pool.query('SELECT 1');
-    const session = driver.session({ defaultAccessMode: neo4j.session.READ });
-    await session.run('RETURN 1 AS ok');
-    await session.close();
-    res.json({ status: 'ok' });
   } catch (error) {
-    res.status(500).json({ status: 'error', error: error.message });
+    status.mysql = 'error';
+    status.error = error.message;
   }
+  try {
+    session = getReadSession();
+    await session.run('RETURN 1 AS ok');
+  } catch (error) {
+    status.neo4j = 'error';
+    status.error = status.error ? `${status.error}; ${error.message}` : error.message;
+  } finally {
+    if (session) {
+      try {
+        await session.close();
+      } catch (closeError) {
+        // Ignore close errors in health checks.
+      }
+    }
+  }
+  const httpStatus = status.mysql === 'ok' && status.neo4j === 'ok' ? 200 : 500;
+  res.status(httpStatus).json(status);
 });
 
 module.exports = router;

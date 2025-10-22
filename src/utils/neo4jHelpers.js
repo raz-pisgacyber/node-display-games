@@ -1,15 +1,60 @@
 const { v4: uuidv4 } = require('uuid');
 
+function tryParseJson(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+  const isComposite = (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  if (!isComposite) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    return value;
+  }
+}
+
+function parseMeta(meta) {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    return meta || {};
+  }
+  return Object.entries(meta).reduce((acc, [key, value]) => {
+    acc[key] = value && typeof value === 'object' ? value : tryParseJson(value);
+    return acc;
+  }, {});
+}
+
+function serialiseMeta(meta) {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    return {};
+  }
+  return Object.entries(meta).reduce((acc, [key, value]) => {
+    if (value === undefined) {
+      return acc;
+    }
+    if (value && typeof value === 'object') {
+      acc[key] = JSON.stringify(value);
+    } else {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
+}
+
 function extractNode(recordNode) {
   if (!recordNode) return null;
   const properties = recordNode.properties || {};
-  const meta = properties.meta || {};
   const lastModified = properties.last_modified;
   return {
     id: properties.id,
     label: properties.label || '',
     content: properties.content || '',
-    meta,
+    meta: parseMeta(properties.meta || {}),
     project_id: properties.project_id || null,
     last_modified: formatNeo4jDate(lastModified),
     version_id: properties.version_id,
@@ -46,4 +91,6 @@ module.exports = {
   formatNeo4jDate,
   validateRelationshipType,
   newVersionMeta,
+  parseMeta,
+  serialiseMeta,
 };

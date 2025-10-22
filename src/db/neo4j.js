@@ -9,6 +9,14 @@ const driver = neo4j.driver(
   }
 );
 
+function getReadSession() {
+  return driver.session({ defaultAccessMode: neo4j.session.READ });
+}
+
+function getWriteSession() {
+  return driver.session({ defaultAccessMode: neo4j.session.WRITE });
+}
+
 async function verifyNeo4jConnection() {
   const connectivity = await driver.verifyConnectivity();
   const resolvedAddress = connectivity?.address?.asHostPort?.() || connectivity?.address;
@@ -25,6 +33,8 @@ async function closeNeo4j() {
 
 module.exports = {
   driver,
+  getReadSession,
+  getWriteSession,
   closeNeo4j,
   verifyNeo4jConnection,
 };

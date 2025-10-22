@@ -171,6 +171,57 @@ function cloneNode(node) {
   };
 }
 
+function maybeParseMetaValue(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+  const isComposite = (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  if (!isComposite) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    return value;
+  }
+}
+
+function normaliseMeta(meta) {
+  if (!meta || typeof meta !== 'object') {
+    if (typeof meta === 'string') {
+      const parsed = maybeParseMetaValue(meta);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    }
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(meta).map(([key, value]) => {
+      if (value && typeof value === 'object') {
+        if (Array.isArray(value)) {
+          return [
+            key,
+            value.map((item) => (item && typeof item === 'object' ? normaliseMeta(item) : maybeParseMetaValue(item))),
+          ];
+        }
+        return [key, normaliseMeta(value)];
+      }
+      return [key, maybeParseMetaValue(value)];
+    })
+  );
+}
+
+function hydrateNode(node) {
+  if (!node) return node;
+  return {
+    ...node,
+    meta: normaliseMeta(node.meta),
+  };
+}
+
 function setErrorBanner(message) {
   state.errorBanner = message;
   renderErrorBanner();
@@ -932,10 +983,11 @@ async function runAutosave() {
   payload.project_id = state.projectId;
   updateAutosaveState('saving');
   try {
-    const updated = await fetchJSON(`${API_BASE}/node/${state.selectedNodeId}`, {
+    const updatedRaw = await fetchJSON(`${API_BASE}/node/${state.selectedNodeId}`, {
       method: 'PATCH',
       body: payload,
     });
+    const updated = hydrateNode(updatedRaw);
     const index = state.graphNodes.findIndex((node) => node.id === updated.id);
     if (index >= 0) {
       state.graphNodes[index] = updated;
@@ -1122,10 +1174,11 @@ async function handleAddNode() {
     y: 160 + Math.floor(state.graphNodes.length / 4) * 200,
   };
   try {
-    const created = await fetchJSON(`${API_BASE}/node`, {
+    const createdRaw = await fetchJSON(`${API_BASE}/node`, {
       method: 'POST',
       body: { label, content: '', meta: { position }, project_id: state.projectId },
     });
+    const created = hydrateNode(createdRaw);
     state.graphNodes.push(created);
     runtime.seededPositions.add(created.id);
     clearErrorBanner();
@@ -1345,7 +1398,7 @@ async function loadGraph() {
   try {
     const params = new URLSearchParams({ project_id: state.projectId });
     const data = await fetchJSON(`${API_BASE}/graph?${params.toString()}`);
-    state.graphNodes = data.nodes || [];
+    state.graphNodes = (data.nodes || []).map(hydrateNode);
     state.graphEdges = data.edges || [];
     state.versionCursor = new Date().toISOString();
     applyDefaultPositions();

@@ -40,3 +40,9 @@
 - Replaced the React/ReactFlow-based main workspace with a standalone vanilla JS implementation so the UI loads without external CDNs.
 - Implemented an SVG-based graph canvas with drag-to-position, edge management, and inspector/editing panels powered by native DOM state.
 - Added console logging for successful MySQL schema initialisation and Neo4j connectivity checks, and gated startup on both services.
+
+## 2025-10-23
+- Investigated 500 errors hitting Neo4j and MySQL integrations.
+- Added explicit read/write session helpers for Neo4j, ensuring write-mode sessions wrap all mutating queries including `/api/graph` and checkpoint operations.
+- Normalised meta payloads by stringifying nested objects before persisting and parsing the values back when nodes are read, with matching hydration logic on the front-end.
+- Hardened LIMIT handling in message and summary SQL queries so parameters are numeric, and enriched the `/api/health` response with distinct MySQL/Neo4j statuses.
