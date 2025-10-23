@@ -54,3 +54,10 @@
   - Wrapped every MySQL query/execute call with structured logging, surfaced SQL + parameter context on 500 responses, and introduced a `/api/debug/db` endpoint for simple connectivity checks.
   - Added a reusable MySQL logging helper, updated schema initialisation and node version utilities to use it, and tightened LIMIT casting by interpolating validated integers into message/summary lookups.
 - Follow-ups: None noted.
+## 2025-10-23 18:24 UTC
+- Files modified: `server.js`, `modules/hub/*`, `modules/main/main.js`, `modules/main/style.css`, `modules/project/project.html`, `modules/project/project.js`, `modules/elements/elements.html`, `modules/elements/elements.js`, `core/core.css`, `modules/hub/hub.css`, `modules/hub/hub.js`, `src/routes/api.js`, `src/db/mysql.js`.
+- Completed tasks:
+  - Restored a dedicated Main Hub with project creation, MySQL-backed project listings, persistent localStorage context, and builder navigation guarded behind project selection.
+  - Added REST endpoints for listing, creating, and retrieving projects plus ensured schema creation for the `projects` table during MySQL bootstrap.
+  - Updated builder UIs to surface active project name/ID, added "Back to Hub" navigation, and synced context labels across toolbars and the main graph workspace.
+- Follow-ups: Consider adding project renaming/deletion flows and surfacing project metadata errors in the hub UI.

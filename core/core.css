@@ -62,10 +62,38 @@ body {
 }
 
 .toolbar-actions {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.toolbar-project {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.toolbar-project__label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.toolbar-project__value {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.toolbar-actions {
+  margin-left: 16px;
 }
 
 .toolbar-action {

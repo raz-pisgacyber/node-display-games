@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node Display Games Builder</title>
+    <link rel="stylesheet" href="./hub.css" />
+  </head>
+  <body>
+    <div class="hub-shell">
+      <aside class="hub-sidebar">
+        <header class="hub-sidebar__header">
+          <h1 class="hub-brand">Node Display Games</h1>
+          <p class="hub-tagline">Craft story worlds through modular builders.</p>
+        </header>
+        <form class="hub-create" data-create-form>
+          <label class="hub-create__label" for="project-name">Project name</label>
+          <div class="hub-create__controls">
+            <input
+              id="project-name"
+              name="project-name"
+              type="text"
+              maxlength="191"
+              placeholder="e.g. City of Glass"
+              required
+            />
+            <button type="submit" class="hub-button" data-action="create-project">Create Project</button>
+          </div>
+          <p class="hub-create__hint">Projects save automatically and can be reopened anytime.</p>
+          <p class="hub-create__error" data-create-error hidden></p>
+        </form>
+        <section class="hub-projects">
+          <header class="hub-section__header">
+            <h2>Saved Projects</h2>
+            <button type="button" class="hub-refresh" data-action="refresh-projects" title="Refresh projects">
+              ↻
+            </button>
+          </header>
+          <div class="hub-projects__body" data-project-list>
+            <p class="hub-empty">Loading projects…</p>
+          </div>
+        </section>
+      </aside>
+      <main class="hub-main">
+        <header class="hub-main__header">
+          <h2>Active Project</h2>
+          <p class="hub-main__active" data-active-project>None selected</p>
+        </header>
+        <section class="hub-marbles">
+          <button class="hub-marble" data-builder="project">
+            <span class="hub-marble__title">Project Builder</span>
+            <span class="hub-marble__subtitle">Plan the world and high-level arcs.</span>
+          </button>
+          <button class="hub-marble" data-builder="elements">
+            <span class="hub-marble__title">Elements Builder</span>
+            <span class="hub-marble__subtitle">Shape characters, places, and artifacts.</span>
+          </button>
+        </section>
+        <p class="hub-notice" data-hub-notice></p>
+      </main>
+    </div>
+    <script type="module" src="./hub.js"></script>
+  </body>
+</html>

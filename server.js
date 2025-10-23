@@ -15,7 +15,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use('/modules', express.static(path.join(__dirname, 'modules')));
 app.use('/core', express.static(path.join(__dirname, 'core')));
-app.use(express.static(path.join(__dirname, 'modules', 'main')));
+app.use(express.static(path.join(__dirname, 'modules', 'hub')));
 
 app.use('/api', apiRouter);
 
@@ -24,7 +24,7 @@ app.get('/favicon.ico', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'modules', 'main', 'index.html'));
+  res.sendFile(path.join(__dirname, 'modules', 'hub', 'index.html'));
 });
 
 app.use((err, req, res, next) => {

@@ -5,6 +5,11 @@ const { queryWithLogging, executeWithLogging } = require('../utils/mysqlLogger')
 const pool = mysql.createPool(config.mysql);
 
 const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS projects (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(191) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`,
   `CREATE TABLE IF NOT EXISTS node_versions (
     project_id VARCHAR(64) NOT NULL,
     node_id VARCHAR(64) NOT NULL,

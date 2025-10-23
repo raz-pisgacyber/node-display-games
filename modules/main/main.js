@@ -2,6 +2,7 @@ const AUTOSAVE_DELAY = 1600;
 const DEFAULT_VERSION_INTERVAL = 6000;
 const API_BASE = '/api';
 const PROJECT_STORAGE_KEY = 'story-graph-project';
+const PROJECT_CONTEXT_STORAGE_KEY = 'story-graph-project-context';
 const SESSION_STORAGE_PREFIX = 'story-graph-session:';
 const USER_ID_STORAGE_KEY = 'story-graph-user-id';
 
@@ -9,6 +10,7 @@ const state = {
   appConfig: {},
   configError: null,
   projectId: null,
+  projectName: '',
   session: null,
   sessionError: null,
   graphNodes: [],
@@ -96,13 +98,78 @@ function normaliseProjectId(value, fallback) {
   return trimmed || fallback;
 }
 
+function parseProjectContext(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.id) return null;
+    return {
+      id: String(parsed.id),
+      name: typeof parsed.name === 'string' ? parsed.name : '',
+    };
+  } catch (error) {
+    console.warn('Failed to parse stored project context', error);
+    return null;
+  }
+}
+
+function getStoredProjectContext() {
+  const raw = window.localStorage.getItem(PROJECT_CONTEXT_STORAGE_KEY);
+  return parseProjectContext(raw);
+}
+
+function updateStoredProjectContext(context) {
+  if (!context || !context.id) {
+    window.localStorage.removeItem(PROJECT_CONTEXT_STORAGE_KEY);
+    window.localStorage.removeItem(PROJECT_STORAGE_KEY);
+    return;
+  }
+  const payload = {
+    id: String(context.id),
+    name: context.name ? String(context.name) : '',
+  };
+  window.localStorage.setItem(PROJECT_CONTEXT_STORAGE_KEY, JSON.stringify(payload));
+  window.localStorage.setItem(PROJECT_STORAGE_KEY, payload.id);
+}
+
+function ensureProjectContext(projectId) {
+  if (!projectId) {
+    window.localStorage.removeItem(PROJECT_CONTEXT_STORAGE_KEY);
+    window.localStorage.removeItem(PROJECT_STORAGE_KEY);
+    return null;
+  }
+  const context = getStoredProjectContext();
+  if (context?.id === projectId) {
+    updateStoredProjectContext(context);
+    return context;
+  }
+  const payload = { id: projectId, name: '' };
+  updateStoredProjectContext(payload);
+  return payload;
+}
+
+function getProjectNameForId(projectId) {
+  if (!projectId) return '';
+  const context = getStoredProjectContext();
+  if (context?.id === projectId) {
+    return context.name || '';
+  }
+  return '';
+}
+
 function determineProjectId(config) {
   const defaultId = config?.default_project_id || 'default_project';
   const params = new URLSearchParams(window.location.search);
   const queryValue = params.get('project') || params.get('project_id');
+  const storedContext = getStoredProjectContext();
   const stored = window.localStorage.getItem(PROJECT_STORAGE_KEY);
-  const finalId = normaliseProjectId(queryValue, normaliseProjectId(stored, defaultId));
+  const finalId = normaliseProjectId(
+    queryValue,
+    normaliseProjectId(storedContext?.id, normaliseProjectId(stored, defaultId))
+  );
   window.localStorage.setItem(PROJECT_STORAGE_KEY, finalId);
+  ensureProjectContext(finalId);
   return finalId;
 }
 
@@ -262,6 +329,25 @@ function renderStatus() {
   ui.statusLabel.textContent = getStatusLabel();
 }
 
+function renderProjectBadge() {
+  if (!ui.projectBadge) return;
+  ui.projectBadge.innerHTML = '';
+  const label = document.createElement('span');
+  label.className = 'header-project-label';
+  label.textContent = 'Active Project';
+  const value = document.createElement('strong');
+  value.className = 'header-project-value';
+  if (state.projectId) {
+    const name = state.projectName?.trim();
+    value.textContent = name ? `${name} (${state.projectId})` : state.projectId;
+    value.title = state.projectId;
+  } else {
+    value.textContent = 'None selected';
+  }
+  ui.projectBadge.appendChild(label);
+  ui.projectBadge.appendChild(value);
+}
+
 function renderErrorBanner() {
   if (!ui.errorBanner || !ui.errorMessage) return;
   if (state.errorBanner) {
@@ -282,15 +368,26 @@ function renderSessionPanel() {
   ui.sessionPanel.appendChild(heading);
 
   if (state.projectId) {
-    const field = document.createElement('div');
-    field.className = 'field';
-    const label = document.createElement('label');
-    label.textContent = 'Project';
-    const value = document.createElement('div');
-    value.textContent = state.projectId;
-    field.appendChild(label);
-    field.appendChild(value);
-    ui.sessionPanel.appendChild(field);
+    const projectField = document.createElement('div');
+    projectField.className = 'field';
+    const projectLabel = document.createElement('label');
+    projectLabel.textContent = 'Project';
+    const projectValue = document.createElement('div');
+    projectValue.textContent = state.projectName || state.projectId;
+    projectValue.title = state.projectId;
+    projectField.appendChild(projectLabel);
+    projectField.appendChild(projectValue);
+    ui.sessionPanel.appendChild(projectField);
+
+    const idField = document.createElement('div');
+    idField.className = 'field';
+    const idLabel = document.createElement('label');
+    idLabel.textContent = 'Project ID';
+    const idValue = document.createElement('div');
+    idValue.textContent = state.projectId;
+    idField.appendChild(idLabel);
+    idField.appendChild(idValue);
+    ui.sessionPanel.appendChild(idField);
   }
 
   if (state.configError) {
@@ -902,6 +999,7 @@ function renderGraph() {
 }
 
 function refreshUI() {
+  renderProjectBadge();
   renderStatus();
   renderErrorBanner();
   renderSessionPanel();
@@ -1449,6 +1547,13 @@ async function checkForUpdates() {
 
 function setProjectId(projectId) {
   if (state.projectId === projectId) return;
+  if (projectId) {
+    const context = ensureProjectContext(projectId);
+    state.projectName = context?.name || '';
+  } else {
+    ensureProjectContext(null);
+    state.projectName = '';
+  }
   state.projectId = projectId;
   state.graphNodes = [];
   state.graphEdges = [];
@@ -1470,10 +1575,30 @@ function setProjectId(projectId) {
   clearAutosaveTimer();
   refreshUI();
   if (projectId) {
+    if (state.projectName) {
+      updateStoredProjectContext({ id: projectId, name: state.projectName });
+    } else {
+      loadProjectDetails(projectId);
+    }
     loadGraph();
     loadCheckpoints();
     loadSessionForProject(projectId);
     startVersionPolling();
+  }
+}
+
+async function loadProjectDetails(projectId) {
+  if (!projectId) return;
+  try {
+    const data = await fetchJSON(`${API_BASE}/project/${encodeURIComponent(projectId)}`);
+    if (data?.id === projectId) {
+      state.projectName = data.name || '';
+      updateStoredProjectContext({ id: projectId, name: state.projectName });
+      renderProjectBadge();
+      renderSessionPanel();
+    }
+  } catch (error) {
+    console.warn('Failed to load project metadata', error);
   }
 }
 
@@ -1501,9 +1626,16 @@ function initialiseUI() {
   root.innerHTML = `
     <div class="app-shell">
       <header class="app-header">
-        <div class="header-title">
-          <h1>Story Graph Studio</h1>
-          <span>Visual editor with live Neo4j + MySQL sync</span>
+        <div class="header-start">
+          <a class="header-back" href="/">← Back to Hub</a>
+          <div class="header-title">
+            <h1>Story Graph Studio</h1>
+            <span>Visual editor with live Neo4j + MySQL sync</span>
+          </div>
+        </div>
+        <div class="header-project" data-project-badge>
+          <span class="header-project-label">Active Project</span>
+          <strong class="header-project-value">None selected</strong>
         </div>
         <div class="header-actions">
           <button type="button" data-action="add-node">Add node</button>
@@ -1539,6 +1671,7 @@ function initialiseUI() {
   ui.statusLabel = root.querySelector('[data-status-label]');
   ui.errorBanner = root.querySelector('[data-error-banner]');
   ui.errorMessage = root.querySelector('[data-error-message]');
+  ui.projectBadge = root.querySelector('[data-project-badge]');
   ui.graphCanvas = root.querySelector('[data-graph-canvas]');
   ui.graphEmpty = root.querySelector('[data-graph-empty]');
   ui.sessionPanel = root.querySelector('[data-session-panel]');
