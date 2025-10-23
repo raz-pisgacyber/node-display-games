@@ -27,3 +27,9 @@
 
 - Agents must always read the current README.md and understand the repository structure and configuration before performing any task.
 - After completing any action or producing output, agents must update the agent_history file with a summary of what was done.
+
+# Agent History
+## [2025-10-23 18:24:00] - codex
+Summary of work completed: Reintroduced a dedicated Main Hub with project lifecycle controls, persistent project context, and builder navigation guards while refreshing all builders with visible active-project badges.
+Key implementation details or architectural notes: Added `/api/projects`, `/api/project`, and `/api/project/:id` endpoints backed by a new `projects` table in MySQL, created a static hub module with localStorage-driven state management, and taught each builder (main, project, elements) to synchronise and display project metadata from shared storage.
+Next steps or handoff notes: Consider implementing project renaming/deletion flows and surfacing hub-side error banners for failed project detail lookups.

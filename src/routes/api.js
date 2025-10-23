@@ -54,6 +54,83 @@ router.get('/config', (req, res) => {
   });
 });
 
+router.get('/projects', async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await queryWithLogging(
+      connection,
+      'SELECT id, name, created_at FROM projects ORDER BY created_at DESC'
+    );
+    res.json({ projects: rows });
+  } catch (error) {
+    next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+router.get('/project/:id', async (req, res, next) => {
+  const { id } = req.params;
+  if (!id) {
+    res.status(400).json({ error: 'id is required' });
+    return;
+  }
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await queryWithLogging(
+      connection,
+      'SELECT id, name, created_at FROM projects WHERE id = ?',
+      [id]
+    );
+    if (!rows.length) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+    res.json(rows[0]);
+  } catch (error) {
+    next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+router.post('/project', async (req, res, next) => {
+  const body = ensureObject(req.body);
+  const rawName = typeof body.name === 'string' ? body.name.trim() : '';
+  const providedId = typeof body.id === 'string' ? body.id.trim() : '';
+
+  if (!rawName) {
+    res.status(400).json({ error: 'name is required' });
+    return;
+  }
+
+  const projectId = providedId || uuidv4();
+  if (projectId.length > 64) {
+    res.status(400).json({ error: 'id must be 64 characters or fewer' });
+    return;
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await executeWithLogging(connection, 'INSERT INTO projects (id, name) VALUES (?, ?)', [projectId, rawName]);
+    const [rows] = await queryWithLogging(
+      connection,
+      'SELECT id, name, created_at FROM projects WHERE id = ?',
+      [projectId]
+    );
+    const payload = rows[0] || { id: projectId, name: rawName };
+    res.status(201).json(payload);
+  } catch (error) {
+    if (error?.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Project with this id already exists' });
+      return;
+    }
+    next(error);
+  } finally {
+    connection.release();
+  }
+});
+
 router.get('/graph', async (req, res, next) => {
   const projectId = (req.query?.project_id || config.defaults.projectId).toString();
   const session = getWriteSession();
