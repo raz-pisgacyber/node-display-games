@@ -1232,6 +1232,16 @@ NodeBase.setLastInteractedNode = function setLastInteractedNode(node) {
   } else if (!node) {
     NodeBase.lastInteractedNode = null;
   }
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    const detail = node instanceof NodeBase
+      ? { nodeId: node.id ?? null, builder: node.meta?.builder ?? '' }
+      : { nodeId: null, builder: '' };
+    try {
+      window.dispatchEvent(new CustomEvent('nodebase:last-interacted', { detail }));
+    } catch (error) {
+      console.warn('Failed to dispatch node interaction event', error);
+    }
+  }
 };
 
 NodeBase.getLastInteractedNode = function getLastInteractedNode() {

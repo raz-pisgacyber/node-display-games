@@ -9,6 +9,7 @@ import {
   getWorkingMemorySettings,
   updateWorkingMemorySettings,
   subscribeWorkingMemorySettings,
+  resetWorkingMemory,
 } from '../common/workingMemory.js';
 import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
 
@@ -59,7 +60,7 @@ const runtime = {
   workingMemorySettingsUnsubscribe: null,
 };
 
-const ui = { workingMemoryControls: null };
+const ui = { workingMemoryControls: null, workingMemoryButton: null };
 
 function ensureWorkingMemorySettingsUI(settings) {
   if (!ui.workingMemoryPanel) {
@@ -128,6 +129,25 @@ function ensureWorkingMemorySettingsUI(settings) {
   });
   ui.workingMemoryPanel.appendChild(toggleGroup);
 
+  const autoRefreshField = document.createElement('div');
+  autoRefreshField.className = 'field';
+  const autoRefreshLabel = document.createElement('label');
+  autoRefreshLabel.textContent = 'Auto-refresh interval (ms)';
+  const autoRefreshInput = document.createElement('input');
+  autoRefreshInput.type = 'number';
+  autoRefreshInput.min = '0';
+  autoRefreshInput.placeholder = '0 (disabled)';
+  autoRefreshInput.value = settings.auto_refresh_interval ? String(settings.auto_refresh_interval) : '';
+  autoRefreshInput.addEventListener('change', () => {
+    const trimmed = autoRefreshInput.value.trim();
+    updateWorkingMemorySettings({
+      auto_refresh_interval: trimmed === '' ? 0 : Number.parseInt(trimmed, 10),
+    });
+  });
+  autoRefreshField.appendChild(autoRefreshLabel);
+  autoRefreshField.appendChild(autoRefreshInput);
+  ui.workingMemoryPanel.appendChild(autoRefreshField);
+
   const actions = document.createElement('div');
   actions.className = 'working-memory-actions';
   const viewButton = document.createElement('button');
@@ -138,9 +158,27 @@ function ensureWorkingMemorySettingsUI(settings) {
     openWorkingMemoryViewer();
   });
   actions.appendChild(viewButton);
+  const resetButton = document.createElement('button');
+  resetButton.type = 'button';
+  resetButton.textContent = 'Reset Working Memory';
+  resetButton.addEventListener('click', () => {
+    const activeNodeId = state.selectedNodeId || '';
+    resetWorkingMemory();
+    initialiseWorkingMemory({
+      projectId: state.projectId || '',
+      sessionId: state.session?.id || '',
+      activeNodeId,
+    });
+    syncWorkingMemoryProjectStructure();
+    syncWorkingMemoryNodeContext();
+    syncWorkingMemoryMessages();
+    syncWorkingMemoryWorkingHistory();
+    syncWorkingMemorySession();
+  });
+  actions.appendChild(resetButton);
   ui.workingMemoryPanel.appendChild(actions);
 
-  ui.workingMemoryControls = { historyInput, toggles };
+  ui.workingMemoryControls = { historyInput, toggles, autoRefreshInput };
   return ui.workingMemoryControls;
 }
 
@@ -189,28 +227,50 @@ function cloneForMemory(value) {
   }
 }
 
+function buildWorkingMemoryMeta(meta = {}, extras = {}) {
+  const source = meta && typeof meta === 'object' ? meta : {};
+  const result = {};
+  const builder = source.builder ?? extras.builder;
+  if (builder) {
+    result.builder = builder;
+  }
+  const notes = extras.notes ?? source.notes;
+  if (typeof notes === 'string' && notes.trim()) {
+    result.notes = notes;
+  }
+  const projectData = source.projectData ?? extras.projectData;
+  if (projectData && typeof projectData === 'object') {
+    result.projectData = cloneForMemory(projectData);
+  }
+  return result;
+}
+
 function buildProjectStructurePayload() {
   if (!state.projectId) {
-    return { project_id: '', nodes: [], edges: [] };
+    return { nodes: [], edges: [] };
   }
   const nodes = state.graphNodes.map((node) => ({
     id: String(node.id),
     label: node.label || '',
-    content: node.content || '',
-    meta: cloneForMemory(node.meta || {}),
-    project_id: state.projectId,
+    meta: buildWorkingMemoryMeta(node.meta || {}, {
+      notes: node.meta?.notes ?? node.notes,
+      projectData: node.meta?.projectData ?? node.projectData,
+      builder: node.meta?.builder,
+    }),
   }));
   const edges = state.graphEdges.map((edge) => ({
     from: String(edge.from),
     to: String(edge.to),
     type: edge.type || 'LINKS_TO',
-    props: cloneForMemory(edge.props || {}),
   }));
-  return { project_id: state.projectId, nodes, edges };
+  return { nodes, edges };
 }
 
 function syncWorkingMemoryProjectStructure() {
   const payload = buildProjectStructurePayload();
+  if (state.projectId) {
+    setWorkingMemorySession({ project_id: state.projectId });
+  }
   setWorkingMemoryProjectStructure(payload);
 }
 
@@ -221,12 +281,12 @@ function buildNodeContextPayload() {
   const context = {
     id: state.draftNode.id,
     label: state.draftNode.label || '',
-    content: state.draftNode.content || '',
-    meta: cloneForMemory(state.draftNode.meta || {}),
+    meta: buildWorkingMemoryMeta(state.draftNode.meta || {}, {
+      notes: state.draftNode.notes ?? state.draftNode.meta?.notes,
+      projectData: state.draftNode.meta?.projectData,
+      builder: state.draftNode.meta?.builder,
+    }),
   };
-  if (state.draftNode.meta?.projectData) {
-    context.projectData = cloneForMemory(state.draftNode.meta.projectData);
-  }
   return context;
 }
 
@@ -666,6 +726,16 @@ function renderWorkingMemorySettings() {
   const historyValue = String(settings.history_length || 20);
   if (controls.historyInput !== document.activeElement && controls.historyInput.value !== historyValue) {
     controls.historyInput.value = historyValue;
+  }
+
+  if (
+    controls.autoRefreshInput &&
+    controls.autoRefreshInput !== document.activeElement
+  ) {
+    const nextValue = settings.auto_refresh_interval ? String(settings.auto_refresh_interval) : '';
+    if (controls.autoRefreshInput.value !== nextValue) {
+      controls.autoRefreshInput.value = nextValue;
+    }
   }
 
   Object.entries(controls.toggles || {}).forEach(([key, checkbox]) => {
@@ -1919,6 +1989,7 @@ function initialiseUI() {
         </div>
         <div class="header-actions">
           <button type="button" data-action="add-node">Add node</button>
+          <button type="button" data-action="working-memory" title="View working memory for the selected node">🧠 Working Memory</button>
           <div class="status-indicator" aria-live="polite">
             <span class="status-dot" data-status-dot></span>
             <span data-status-label>Idle</span>
@@ -1957,6 +2028,7 @@ function initialiseUI() {
   ui.graphEmpty = root.querySelector('[data-graph-empty]');
   ui.workingMemoryPanel = root.querySelector('[data-working-memory-panel]');
   ui.workingMemoryControls = null;
+  ui.workingMemoryButton = root.querySelector('[data-action="working-memory"]');
   ui.sessionPanel = root.querySelector('[data-session-panel]');
   ui.nodeInspector = root.querySelector('[data-node-inspector]');
   ui.edgesPanel = root.querySelector('[data-edges-panel]');
@@ -1965,6 +2037,15 @@ function initialiseUI() {
   ui.checkpointsPanel = root.querySelector('[data-checkpoints-panel]');
 
   ui.addNodeButton?.addEventListener('click', handleAddNode);
+  ui.workingMemoryButton?.addEventListener('click', () => {
+    syncWorkingMemoryProjectStructure();
+    syncWorkingMemoryNodeContext();
+    syncWorkingMemoryWorkingHistory();
+    syncWorkingMemoryMessages();
+    const activeNodeId = state.selectedNodeId || '';
+    setWorkingMemorySession({ active_node_id: activeNodeId });
+    openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeNodeId });
+  });
   ui.graphCanvas?.addEventListener('pointermove', handlePointerMove);
   ui.graphCanvas?.addEventListener('pointerup', handlePointerUp);
   ui.graphCanvas?.addEventListener('pointercancel', handlePointerCancel);

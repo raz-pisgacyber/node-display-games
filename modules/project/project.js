@@ -52,6 +52,24 @@ function cloneForMemory(value) {
   }
 }
 
+function buildWorkingMemoryMeta(meta = {}, extras = {}) {
+  const source = meta && typeof meta === 'object' ? meta : {};
+  const result = {};
+  const builder = source.builder ?? extras.builder;
+  if (builder) {
+    result.builder = builder;
+  }
+  const notes = extras.notes ?? source.notes;
+  if (typeof notes === 'string' && notes.trim()) {
+    result.notes = notes;
+  }
+  const projectData = source.projectData ?? extras.projectData;
+  if (projectData && typeof projectData === 'object') {
+    result.projectData = cloneForMemory(projectData);
+  }
+  return result;
+}
+
 function buildNodeContextFromInstance(node) {
   if (!node) {
     return null;
@@ -59,18 +77,12 @@ function buildNodeContextFromInstance(node) {
   const context = {
     id: node.id,
     label: node.title || node.meta?.title || '',
-    content: node.fullText || '',
-    meta: cloneForMemory(node.meta || {}),
+    meta: buildWorkingMemoryMeta(node.meta || {}, {
+      notes: typeof node.notes === 'string' ? node.notes : node.meta?.notes,
+      projectData: node.projectData ?? node.meta?.projectData,
+      builder: node.meta?.builder || 'project',
+    }),
   };
-  if (node.projectData) {
-    context.projectData = cloneForMemory(node.projectData);
-  }
-  if (typeof node.notes === 'string') {
-    context.notes = node.notes;
-  }
-  if (Array.isArray(node.children) && node.children.length) {
-    context.children = node.children.map((child) => child.id);
-  }
   return context;
 }
 
@@ -92,9 +104,11 @@ function buildProjectStructureSnapshot(projectId) {
       nodes.push({
         id: String(instance.id),
         label: instance.title || '',
-        content: instance.fullText || '',
-        meta: cloneForMemory(instance.meta || {}),
-        project_id: projectId || instance.projectId || '',
+        meta: buildWorkingMemoryMeta(instance.meta || {}, {
+          notes: typeof instance.notes === 'string' ? instance.notes : instance.meta?.notes,
+          projectData: instance.projectData ?? instance.meta?.projectData,
+          builder: instance.meta?.builder || 'project',
+        }),
       });
       if (Array.isArray(instance.children)) {
         instance.children.forEach((child) => {
@@ -106,16 +120,18 @@ function buildProjectStructureSnapshot(projectId) {
             from: String(instance.id),
             to: String(child.id),
             type: 'CHILD_OF',
-            props: { context: 'project' },
           });
         });
       }
     });
   }
-  return { project_id: projectId || '', nodes, edges };
+  return { nodes, edges };
 }
 
 function syncWorkingMemoryStructure(projectId) {
+  if (projectId) {
+    setWorkingMemorySession({ project_id: projectId });
+  }
   setWorkingMemoryProjectStructure(buildProjectStructureSnapshot(projectId));
 }
 
@@ -137,6 +153,7 @@ const state = {
   listenersAttached: false,
   lifecycleAttached: false,
   navigationGuardAttached: false,
+  nodeInteractionAttached: false,
 };
 
 function parseProjectContext(raw) {
@@ -319,6 +336,36 @@ function attachLifecycleHooks() {
   state.lifecycleAttached = true;
 }
 
+function handleLastInteractedNodeEvent(event) {
+  const detail = event?.detail || {};
+  const builder = typeof detail.builder === 'string' ? detail.builder.toLowerCase() : '';
+  if (builder && builder !== 'project') {
+    return;
+  }
+  const nodeId = detail.nodeId ? String(detail.nodeId) : '';
+  if (!nodeId) {
+    setWorkingMemoryNodeContext({});
+    setWorkingMemorySession({ active_node_id: '' });
+    return;
+  }
+  const node = NodeBase.getLastInteractedNode?.();
+  if (!node || String(node.id) !== nodeId) {
+    return;
+  }
+  if (state.projectId && node.projectId && node.projectId !== state.projectId) {
+    return;
+  }
+  syncWorkingMemoryNode(node, state.projectId);
+}
+
+function attachNodeInteractionTracker() {
+  if (state.nodeInteractionAttached) {
+    return;
+  }
+  window.addEventListener('nodebase:last-interacted', handleLastInteractedNodeEvent);
+  state.nodeInteractionAttached = true;
+}
+
 const init = async (projectId) => {
   const workspace = document.getElementById('workspace');
   if (!workspace) {
@@ -352,6 +399,7 @@ const init = async (projectId) => {
   }
   attachNavigationGuard();
   attachLifecycleHooks();
+  attachNodeInteractionTracker();
 
   const checkpointButton = document.querySelector('[data-action="save-checkpoint"]');
   if (checkpointButton) {
@@ -376,8 +424,14 @@ const init = async (projectId) => {
   const workingMemoryButton = document.querySelector('[data-action="working-memory"]');
   if (workingMemoryButton) {
     workingMemoryButton.addEventListener('click', () => {
+      const lastNode = NodeBase.getLastInteractedNode?.();
       syncWorkingMemoryStructure(state.projectId);
-      openWorkingMemoryViewer();
+      if (lastNode && (!state.projectId || lastNode.projectId === state.projectId)) {
+        syncWorkingMemoryNode(lastNode, state.projectId);
+      }
+      const activeId = lastNode?.id || '';
+      setWorkingMemorySession({ project_id: state.projectId || '', active_node_id: activeId });
+      openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeId });
     });
   }
 

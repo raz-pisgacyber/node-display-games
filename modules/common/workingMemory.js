@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS = {
   include_project_structure: true,
   include_context: true,
   include_working_history: true,
+  auto_refresh_interval: 0,
 };
 
 const MAX_HISTORY_LENGTH = 200;
@@ -74,6 +75,7 @@ function loadSettings() {
       include_project_structure: Boolean(parsed.include_project_structure ?? DEFAULT_SETTINGS.include_project_structure),
       include_context: Boolean(parsed.include_context ?? DEFAULT_SETTINGS.include_context),
       include_working_history: Boolean(parsed.include_working_history ?? DEFAULT_SETTINGS.include_working_history),
+      auto_refresh_interval: normaliseAutoRefreshInterval(parsed.auto_refresh_interval),
     };
   } catch (error) {
     console.warn('Failed to load working memory settings', error);
@@ -222,6 +224,35 @@ function normaliseHistoryLength(value) {
   return Math.min(parsed, MAX_HISTORY_LENGTH);
 }
 
+function normaliseAutoRefreshInterval(value) {
+  if (value === null || value === undefined || value === '') {
+    return 0;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return DEFAULT_SETTINGS.auto_refresh_interval;
+  }
+  return parsed;
+}
+
+function sanitiseMeta(meta = {}, fallback = {}) {
+  const source = typeof meta === 'object' && meta ? meta : {};
+  const result = {};
+  const builder = source.builder ?? fallback.builder;
+  if (builder) {
+    result.builder = safeString(builder);
+  }
+  const notes = source.notes ?? fallback.notes;
+  if (typeof notes === 'string' && notes.trim()) {
+    result.notes = notes;
+  }
+  const projectData = source.projectData ?? fallback.projectData;
+  if (projectData && typeof projectData === 'object') {
+    result.projectData = cloneJson(projectData);
+  }
+  return result;
+}
+
 function sanitiseStructureNode(node) {
   if (!node) {
     return null;
@@ -230,13 +261,15 @@ function sanitiseStructureNode(node) {
   if (!id) {
     return null;
   }
-  const meta = cloneJson(node.meta || node.projectData || {});
+  const meta = sanitiseMeta(node.meta, {
+    notes: node.notes,
+    projectData: node.projectData,
+    builder: node.builder,
+  });
   return {
     id,
     label: safeString(node.label ?? node.title ?? ''),
-    content: safeString(node.content ?? node.fullText ?? ''),
     meta,
-    project_id: safeString(node.project_id ?? ''),
   };
 }
 
@@ -253,7 +286,6 @@ function sanitiseStructureEdge(edge) {
     from,
     to,
     type: safeString(edge.type || 'LINKS_TO'),
-    props: cloneJson(edge.props || {}),
   };
 }
 
@@ -277,21 +309,12 @@ function sanitiseNodeContext(context) {
   const nodeContext = {
     id: safeString(context.id ?? context.node_id ?? ''),
     label: safeString(context.label ?? context.title ?? ''),
-    content: safeString(context.content ?? context.fullText ?? ''),
-    meta: cloneJson(context.meta || {}),
+    meta: sanitiseMeta(context.meta, {
+      notes: context.notes,
+      projectData: context.projectData,
+      builder: context.builder,
+    }),
   };
-  if (context.projectData) {
-    nodeContext.projectData = cloneJson(context.projectData);
-  }
-  if (context.notes) {
-    nodeContext.notes = safeString(context.notes);
-  }
-  if (context.type) {
-    nodeContext.type = safeString(context.type);
-  }
-  if (Array.isArray(context.children)) {
-    nodeContext.children = context.children.map((child) => safeString(child)).filter(Boolean);
-  }
   return nodeContext;
 }
 
@@ -362,6 +385,34 @@ function applySettingsToMemory() {
   target.last_user_message = deriveLastUserMessage(target.messages);
 }
 
+function buildNodeScopedSnapshot(snapshot, nodeId) {
+  const scoped = cloneJson(snapshot);
+  const targetId = nodeId ? safeString(nodeId) : scoped.session?.active_node_id || '';
+  if (!targetId) {
+    scoped.project_structure = { nodes: [], edges: [] };
+    scoped.node_context = {};
+    scoped.messages = [];
+    scoped.last_user_message = '';
+    return scoped;
+  }
+  const structure = snapshot.project_structure || {};
+  const nodes = Array.isArray(structure.nodes) ? structure.nodes.filter((node) => node.id === targetId) : [];
+  const edges = Array.isArray(structure.edges)
+    ? structure.edges.filter((edge) => edge.from === targetId || edge.to === targetId)
+    : [];
+  scoped.project_structure = { nodes, edges };
+  if (snapshot.node_context?.id === targetId) {
+    scoped.node_context = cloneJson(snapshot.node_context);
+  } else {
+    scoped.node_context = {};
+  }
+  scoped.messages = Array.isArray(snapshot.messages)
+    ? snapshot.messages.filter((message) => !message.node_id || message.node_id === targetId)
+    : [];
+  scoped.last_user_message = deriveLastUserMessage(scoped.messages);
+  return scoped;
+}
+
 function readStoredSession(projectId) {
   if (!projectId || typeof window === 'undefined' || !window.localStorage) {
     return null;
@@ -389,9 +440,16 @@ export function getWorkingMemorySnapshot() {
   return cloneJson(ensureMemory());
 }
 
-export function serialiseWorkingMemory() {
+export function getWorkingMemorySnapshotForNode(nodeId) {
+  const snapshot = getWorkingMemorySnapshot();
+  return buildNodeScopedSnapshot(snapshot, nodeId);
+}
+
+export function serialiseWorkingMemory(options = {}) {
   try {
-    return JSON.stringify(getWorkingMemorySnapshot(), null, 2);
+    const snapshot = getWorkingMemorySnapshot();
+    const payload = options.nodeOnly ? buildNodeScopedSnapshot(snapshot, options.nodeId) : snapshot;
+    return JSON.stringify(payload, null, 2);
   } catch (error) {
     console.warn('Failed to serialise working memory', error);
     return '{}';
@@ -548,6 +606,9 @@ export function updateWorkingMemorySettings(partial = {}) {
   }
   if (partial.include_working_history !== undefined) {
     next.include_working_history = Boolean(partial.include_working_history);
+  }
+  if (partial.auto_refresh_interval !== undefined) {
+    next.auto_refresh_interval = normaliseAutoRefreshInterval(partial.auto_refresh_interval);
   }
   settings = next;
   saveSettings(settings);
