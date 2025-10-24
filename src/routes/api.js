@@ -441,6 +441,169 @@ router.patch('/edge', async (req, res, next) => {
   }
 });
 
+router.get('/links', async (req, res, next) => {
+  const nodeId = req.query?.node_id;
+  if (!nodeId) {
+    res.status(400).json({ error: 'node_id is required' });
+    return;
+  }
+  const relationshipType = validateRelationshipType(req.query?.type);
+  const projectId = (req.query?.project_id || config.defaults.projectId).toString();
+  const session = getReadSession();
+  try {
+    const result = await session.run(
+      `MATCH (n:ProjectNode {id: $nodeId})
+       WHERE coalesce(n.project_id, $projectId) = $projectId
+       SET n.project_id = coalesce(n.project_id, $projectId)
+       WITH n
+       OPTIONAL MATCH (n)-[r:${relationshipType}]-(m:ProjectNode)
+       WHERE coalesce(m.project_id, $projectId) = $projectId
+       RETURN n AS node,
+              collect({
+                other: m,
+                type: type(r),
+                props: properties(r),
+                direction: CASE WHEN startNode(r).id = n.id THEN 'out' ELSE 'in' END
+              }) AS links`,
+      { nodeId, projectId }
+    );
+    if (!result.records.length) {
+      res.status(404).json({ error: 'Node not found' });
+      return;
+    }
+    const record = result.records[0];
+    const node = extractNode(record.get('node'));
+    const rawLinks = record.get('links') || [];
+    const links = [];
+    const groups = {};
+    rawLinks.forEach((entry) => {
+      const entryAccessor =
+        entry && typeof entry.get === 'function'
+          ? (key) => entry.get(key)
+          : (key) => (entry && Object.prototype.hasOwnProperty.call(entry, key) ? entry[key] : null);
+      const otherNode = entryAccessor('other');
+      if (!otherNode) {
+        return;
+      }
+      const extracted = extractNode(otherNode);
+      if (!extracted?.id) {
+        return;
+      }
+      const meta = extracted.meta || {};
+      const builder = (meta.builder || '').toLowerCase() || 'unknown';
+      let subtype = 'default';
+      if (builder === 'elements') {
+        subtype = (meta.elementType || meta.type || 'other').toLowerCase();
+      } else if (builder === 'project') {
+        subtype = 'project';
+      } else if (builder !== 'unknown') {
+        subtype = builder;
+      }
+      if (!groups[builder]) {
+        groups[builder] = {};
+      }
+      if (!groups[builder][subtype]) {
+        groups[builder][subtype] = [];
+      }
+      const detail = {
+        id: extracted.id,
+        label: extracted.label || extracted.id,
+        builder,
+        element_type: builder === 'elements' ? subtype : null,
+        project_id: extracted.project_id || projectId,
+        relationship_type: entryAccessor('type') || relationshipType,
+        direction: entryAccessor('direction') || 'undirected',
+        props: ensureObject(entryAccessor('props')),
+      };
+      groups[builder][subtype].push(detail);
+      links.push(detail);
+    });
+    res.json({
+      node_id: node?.id || nodeId,
+      project_id: projectId,
+      relationship_type: relationshipType,
+      links,
+      groups,
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    await session.close();
+  }
+});
+
+router.post('/link', async (req, res, next) => {
+  const body = ensureObject(req.body);
+  const { from, to } = body;
+  if (!from || !to) {
+    res.status(400).json({ error: 'from and to are required' });
+    return;
+  }
+  const relationshipType = validateRelationshipType(body.type);
+  const projectId = (body.project_id || config.defaults.projectId).toString();
+  const props = ensureObject(body.props);
+  const session = getWriteSession();
+  const [source, target] = [from, to].sort();
+  try {
+    const result = await session.writeTransaction((tx) =>
+      tx.run(
+        `MATCH (a:ProjectNode {id: $source}), (b:ProjectNode {id: $target})
+         WHERE coalesce(a.project_id, $projectId) = $projectId AND coalesce(b.project_id, $projectId) = $projectId
+         SET a.project_id = coalesce(a.project_id, $projectId)
+         SET b.project_id = coalesce(b.project_id, $projectId)
+         MERGE (a)-[r:${relationshipType}]-(b)
+         SET r += $props
+         RETURN {from: a.id, to: b.id, type: type(r), props: properties(r), project_id: $projectId} AS link`,
+        { source, target, props, projectId }
+      )
+    );
+    if (!result.records.length) {
+      res.status(404).json({ error: 'Nodes not found' });
+      return;
+    }
+    res.status(201).json(result.records[0].get('link'));
+  } catch (error) {
+    next(error);
+  } finally {
+    await session.close();
+  }
+});
+
+router.delete('/link', async (req, res, next) => {
+  const body = ensureObject(req.body);
+  const { from, to } = body;
+  if (!from || !to) {
+    res.status(400).json({ error: 'from and to are required' });
+    return;
+  }
+  const relationshipType = validateRelationshipType(body.type);
+  const projectId = (body.project_id || config.defaults.projectId).toString();
+  const session = getWriteSession();
+  const [source, target] = [from, to].sort();
+  try {
+    const result = await session.writeTransaction((tx) =>
+      tx.run(
+        `MATCH (a:ProjectNode {id: $source})-[r:${relationshipType}]-(b:ProjectNode {id: $target})
+         WHERE coalesce(a.project_id, $projectId) = $projectId AND coalesce(b.project_id, $projectId) = $projectId
+         WITH r
+         DELETE r
+         RETURN count(*) AS deleted`,
+        { source, target, projectId }
+      )
+    );
+    const deleted = result.records[0].get('deleted');
+    if (!deleted) {
+      res.status(404).json({ error: 'Link not found' });
+      return;
+    }
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  } finally {
+    await session.close();
+  }
+});
+
 router.get('/versions/check', async (req, res, next) => {
   const { since } = req.query;
   const projectId = (req.query?.project_id || config.defaults.projectId).toString();

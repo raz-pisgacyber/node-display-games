@@ -1,5 +1,6 @@
 import NodeBase from '../../core/nodebase.js';
 import util from '../../core/util.js';
+import { fetchLinks, createLink, deleteLink } from '../common/api.js';
 
 const ensurePanelHost = () => {
   if (!NodeBase.panelHost) {
@@ -49,6 +50,15 @@ class ElementNode extends NodeBase {
     this.meta.builder = 'elements';
     this.meta.elementType = this.type;
     this.meta.elementData = ElementNode.cloneData(this.data);
+
+    // Initialise linked project tracking for the data card UI.
+    this.linkState = {
+      loading: false,
+      error: '',
+      items: [],
+      pending: false,
+    };
+    this.linkedProjectsUI = null;
   }
 
   getIconDefinitions() {
@@ -293,6 +303,7 @@ class ElementNode extends NodeBase {
     }
 
     this.addCustomFieldsSection(container);
+    this.addLinkedProjectsSection(container);
   }
 
   addField(container, { label, type = 'textarea', value = '', onInput, placeholder = '' }) {
@@ -527,6 +538,322 @@ class ElementNode extends NodeBase {
     }
   }
 
+  ensureLinkState() {
+    if (!this.linkState) {
+      this.linkState = {
+        loading: false,
+        error: '',
+        items: [],
+        pending: false,
+      };
+    }
+    return this.linkState;
+  }
+
+  static setAvailableProjectNodes(nodes = [], projectId = null) {
+    ElementNode.availableProjectNodes = Array.isArray(nodes) ? nodes.slice() : [];
+    ElementNode.availableProjectProject = projectId || null;
+  }
+
+  static getAvailableProjectNodes(projectId) {
+    if (
+      ElementNode.availableProjectProject &&
+      projectId &&
+      projectId !== ElementNode.availableProjectProject
+    ) {
+      return [];
+    }
+    return (ElementNode.availableProjectNodes || []).map((item) => ({ ...item }));
+  }
+
+  static getProjectLinkInfo() {
+    return { icon: '🎬', label: 'Project Node' };
+  }
+
+  addLinkedProjectsSection(container) {
+    const section = document.createElement('section');
+    section.className = 'element-data-card__custom';
+
+    const heading = document.createElement('h3');
+    heading.textContent = 'Linked Scenes / Project Nodes';
+    section.appendChild(heading);
+
+    const helper = document.createElement('p');
+    helper.className = 'element-data-card__custom-empty';
+    helper.textContent = 'Connect this element to scenes, beats, or other project nodes.';
+    section.appendChild(helper);
+
+    const listWrapper = document.createElement('div');
+    listWrapper.className = 'element-data-card__custom-grid';
+    listWrapper.style.maxHeight = '220px';
+    listWrapper.style.overflowY = 'auto';
+    section.appendChild(listWrapper);
+
+    const selectorLabel = document.createElement('label');
+    selectorLabel.textContent = 'Add scene';
+    section.appendChild(selectorLabel);
+
+    const select = document.createElement('select');
+    select.disabled = true;
+    section.appendChild(select);
+
+    const addButton = document.createElement('button');
+    addButton.type = 'button';
+    addButton.className = 'element-data-card__add-field';
+    addButton.textContent = 'Add Scene';
+    addButton.disabled = true;
+    section.appendChild(addButton);
+
+    container.appendChild(section);
+
+    this.linkedProjectsUI = { section, listWrapper, select, addButton, helper };
+    select.addEventListener('change', () => {
+      this.updateLinkedProjectControls();
+    });
+    addButton.addEventListener('click', () => {
+      this.handleAddLinkedProject();
+    });
+
+    this.renderLinkedProjectsList();
+    this.populateLinkedProjectOptions();
+    this.refreshLinkedProjects();
+  }
+
+  renderLinkedProjectsList() {
+    const state = this.ensureLinkState();
+    const ui = this.linkedProjectsUI;
+    if (!ui) {
+      return;
+    }
+    const { listWrapper } = ui;
+    listWrapper.innerHTML = '';
+
+    if (!this.projectId) {
+      const message = document.createElement('p');
+      message.className = 'element-data-card__custom-empty';
+      message.textContent = 'Select a project to manage linked scenes.';
+      listWrapper.appendChild(message);
+      return;
+    }
+
+    if (state.loading) {
+      const loading = document.createElement('p');
+      loading.className = 'element-data-card__custom-empty';
+      loading.textContent = 'Loading linked scenes…';
+      listWrapper.appendChild(loading);
+      return;
+    }
+
+    if (state.error) {
+      const error = document.createElement('p');
+      error.className = 'element-data-card__custom-empty';
+      error.textContent = state.error;
+      listWrapper.appendChild(error);
+      return;
+    }
+
+    if (!state.items.length) {
+      const empty = document.createElement('p');
+      empty.className = 'element-data-card__custom-empty';
+      empty.textContent = 'No linked scenes yet.';
+      listWrapper.appendChild(empty);
+      return;
+    }
+
+    const info = ElementNode.getProjectLinkInfo();
+    const sorted = state.items
+      .slice()
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+
+    sorted.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'element-data-card__custom-row';
+
+      const iconCell = document.createElement('div');
+      iconCell.textContent = info.icon;
+      iconCell.style.fontSize = '20px';
+      iconCell.style.lineHeight = '32px';
+      row.appendChild(iconCell);
+
+      const textCell = document.createElement('div');
+      const name = document.createElement('div');
+      name.textContent = item.label;
+      const typeLabel = document.createElement('small');
+      typeLabel.textContent = info.label;
+      typeLabel.style.display = 'block';
+      typeLabel.style.fontSize = '12px';
+      typeLabel.style.opacity = '0.7';
+      textCell.appendChild(name);
+      textCell.appendChild(typeLabel);
+      row.appendChild(textCell);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'element-data-card__remove-field';
+      remove.textContent = '✕';
+      remove.title = `Remove ${item.label}`;
+      remove.disabled = state.pending;
+      remove.addEventListener('click', () => {
+        this.removeLinkedProject(item);
+      });
+      row.appendChild(remove);
+
+      listWrapper.appendChild(row);
+    });
+  }
+
+  updateLinkedProjectControls() {
+    const ui = this.linkedProjectsUI;
+    if (!ui) {
+      return;
+    }
+    const state = this.ensureLinkState();
+    const available = ElementNode.getAvailableProjectNodes(this.projectId);
+    const linkedIds = new Set(state.items.map((item) => item.id));
+    const hasChoices = available.some((item) => !linkedIds.has(item.id));
+    ui.select.disabled = !hasChoices || state.pending || !this.projectId;
+    const value = ui.select.value;
+    ui.addButton.disabled =
+      state.pending || !this.projectId || !hasChoices || !value || value === '';
+  }
+
+  populateLinkedProjectOptions() {
+    const ui = this.linkedProjectsUI;
+    if (!ui) {
+      return;
+    }
+    const state = this.ensureLinkState();
+    const select = ui.select;
+    const previousValue = select.value;
+    const available = ElementNode.getAvailableProjectNodes(this.projectId);
+    const linkedIds = new Set(state.items.map((item) => item.id));
+    const options = available.filter((item) => !linkedIds.has(item.id));
+
+    select.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = options.length ? 'Select a scene…' : 'No scenes available';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.appendChild(placeholder);
+
+    options
+      .slice()
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
+      .forEach((item) => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.label;
+        select.appendChild(option);
+      });
+
+    if (previousValue && options.some((item) => item.id === previousValue)) {
+      select.value = previousValue;
+    } else {
+      select.value = '';
+    }
+
+    this.updateLinkedProjectControls();
+  }
+
+  async refreshLinkedProjects() {
+    const state = this.ensureLinkState();
+    if (!this.projectId || !this.id) {
+      state.items = [];
+      state.error = this.projectId ? '' : 'Project context missing.';
+      this.renderLinkedProjectsList();
+      this.populateLinkedProjectOptions();
+      return;
+    }
+    state.loading = true;
+    state.error = '';
+    this.renderLinkedProjectsList();
+    try {
+      const response = await fetchLinks(this.id, { projectId: this.projectId });
+      const fallbackType = response?.relationship_type || 'LINKS_TO';
+      const items = Array.isArray(response?.links) ? response.links : [];
+      const seen = new Set();
+      state.items = items
+        .filter((item) => item && item.builder === 'project' && item.id)
+        .map((item) => ({
+          id: item.id,
+          label: item.label || item.id,
+          relationshipType: item.relationship_type || fallbackType,
+        }))
+        .filter((item) => {
+          if (seen.has(item.id)) {
+            return false;
+          }
+          seen.add(item.id);
+          return true;
+        });
+    } catch (error) {
+      console.error('Failed to load linked project nodes', error);
+      state.error = 'Failed to load linked scenes.';
+      state.items = [];
+    } finally {
+      state.loading = false;
+      this.renderLinkedProjectsList();
+      this.populateLinkedProjectOptions();
+    }
+  }
+
+  async handleAddLinkedProject() {
+    const ui = this.linkedProjectsUI;
+    if (!ui) {
+      return;
+    }
+    const state = this.ensureLinkState();
+    if (!this.projectId || !this.id || !ui.select.value || state.pending) {
+      return;
+    }
+    const targetId = ui.select.value;
+    state.pending = true;
+    this.updateLinkedProjectControls();
+    this.renderLinkedProjectsList();
+    try {
+      await createLink(
+        { from: this.id, to: targetId, type: 'LINKS_TO' },
+        { projectId: this.projectId }
+      );
+      ui.select.value = '';
+      await this.refreshLinkedProjects();
+    } catch (error) {
+      console.error('Failed to link project node', error);
+      state.error = 'Failed to add scene link.';
+      this.renderLinkedProjectsList();
+    } finally {
+      state.pending = false;
+      this.populateLinkedProjectOptions();
+      this.updateLinkedProjectControls();
+    }
+  }
+
+  async removeLinkedProject(item) {
+    const state = this.ensureLinkState();
+    if (!item?.id || state.pending || !this.projectId) {
+      return;
+    }
+    state.pending = true;
+    this.updateLinkedProjectControls();
+    this.renderLinkedProjectsList();
+    try {
+      await deleteLink(
+        { from: this.id, to: item.id, type: item.relationshipType || 'LINKS_TO' },
+        { projectId: this.projectId }
+      );
+      await this.refreshLinkedProjects();
+    } catch (error) {
+      console.error('Failed to remove project link', error);
+      state.error = 'Failed to remove scene link.';
+      this.renderLinkedProjectsList();
+    } finally {
+      state.pending = false;
+      this.populateLinkedProjectOptions();
+      this.updateLinkedProjectControls();
+    }
+  }
+
   setPosition(x, y, animate = true) {
     super.setPosition(x, y, animate);
     ElementNode.linkManager?.updateLinksForNode(this);
@@ -601,6 +928,9 @@ class OtherNode extends ElementNode {
     super({ ...options, type: 'other' });
   }
 }
+
+ElementNode.availableProjectNodes = [];
+ElementNode.availableProjectProject = null;
 
 ElementNode.typeRegistry = {
   character: CharacterNode,

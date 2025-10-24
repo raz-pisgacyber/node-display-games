@@ -381,6 +381,25 @@ const init = async (projectId) => {
     const graph = await fetchGraph(projectId);
     const nodes = graph?.nodes || [];
     const edges = graph?.edges || [];
+    const availableElements = nodes
+      .filter((node) => (node.meta?.builder || '').toLowerCase() === 'elements')
+      .map((nodeData) => {
+        const meta = nodeData.meta || {};
+        const elementType = ProjectNode.normaliseElementType(
+          meta.elementType || meta.type || meta.elementData?.type || 'other'
+        );
+        const label =
+          nodeData.label ||
+          meta.title ||
+          meta.elementData?.title ||
+          (typeof nodeData.id === 'string' ? nodeData.id : String(nodeData.id));
+        return {
+          id: nodeData.id,
+          label,
+          type: elementType,
+        };
+      });
+    ProjectNode.setAvailableElements(availableElements, projectId);
     nodes
       .filter((node) => (node.meta?.builder || '').toLowerCase() === 'project')
       .forEach((nodeData) => {
