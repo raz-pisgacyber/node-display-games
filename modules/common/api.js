@@ -133,6 +133,47 @@ export async function deleteLink(payload, { projectId, keepalive } = {}) {
   });
 }
 
+export async function fetchMessages(sessionId, { nodeId, limit } = {}) {
+  if (!sessionId) {
+    throw new Error('sessionId is required');
+  }
+  const params = new URLSearchParams();
+  params.set('session_id', sessionId);
+  if (nodeId) {
+    params.set('node_id', nodeId);
+  }
+  if (limit) {
+    params.set('limit', String(limit));
+  }
+  const data = await fetchJSON(`/api/messages?${params.toString()}`);
+  return Array.isArray(data?.messages) ? data.messages : [];
+}
+
+export async function sendMessage({ sessionId, nodeId = null, role = 'user', content, keepalive } = {}) {
+  if (!sessionId) {
+    throw new Error('sessionId is required');
+  }
+  if (!role) {
+    throw new Error('role is required');
+  }
+  if (!content || !content.trim()) {
+    throw new Error('content is required');
+  }
+  const body = {
+    session_id: sessionId,
+    role,
+    content,
+  };
+  if (nodeId) {
+    body.node_id = nodeId;
+  }
+  return fetchJSON('/api/messages', {
+    method: 'POST',
+    body,
+    keepalive,
+  });
+}
+
 export async function createCheckpoint(projectId, name) {
   const body = { project_id: projectId };
   if (name) {

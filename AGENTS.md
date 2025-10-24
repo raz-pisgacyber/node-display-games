@@ -30,6 +30,13 @@
 - Agents must always update the Agent History at the end of this file after completing work.
 - The current visual design of the Project Builder and Elements Builder is approved. Functional changes must not alter layout, styles, or interaction aesthetics.
 
+## Discussion Card Updates
+
+- Discussion panels now render chat-style conversations shared between the user and the AI helper while preserving the existing card footprint and visual language.
+- Message history is loaded and persisted through the `/api/messages` endpoints so every node restores its transcript on open.
+- A mock “Action” button lives beside the message composer as a placeholder for future AI commands—keep it visually present but non-functional for now.
+- Future enhancements should extend this chat to trigger real AI actions while maintaining the current UI patterns.
+
 # Agent History
 ## [2025-10-23 18:24:00] - codex
 Summary of work completed: Reintroduced a dedicated Main Hub with project lifecycle controls, persistent project context, and builder navigation guards while refreshing all builders with visible active-project badges.
@@ -52,3 +59,5 @@ Maintained full design consistency and autosave integration.
 ## [2025-10-28 09:15:00] - codex
 Resolved Neo4j write access errors by ensuring the `/api/links` fetch runs through a write-mode session when backfilling `project_id` fields.
 Confirmed link creation and retrieval routes now operate without triggering read-only transaction failures.
+## [2025-10-28 22:00:00] - codex
+Converted node discussion cards into chat-driven panels backed by `/api/messages`, added optimistic user sends with persistent history reloads, and introduced a mock Action control for upcoming AI commands while keeping the builder visuals intact.

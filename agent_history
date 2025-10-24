@@ -104,3 +104,10 @@
   - Switched the `/api/links` fetch endpoint to use a write-capable Neo4j session so its backfilling `SET` clauses no longer trigger "write in read mode" errors.
   - Documented the resolved issue in `AGENTS.md` Agent History for future maintainers.
 - Verification: Neo4j link creation and retrieval now proceed without read-only transaction failures.
+## 2025-10-28 22:00 UTC
+- Files modified: `core/nodebase.js`, `core/core.css`, `core/session.js`, `modules/common/api.js`, `AGENTS.md`, `agent_history`.
+- Completed tasks:
+  - Replaced the textarea-based discussion card with a chat transcript that streams history from `/api/messages`, formats AI/user roles, and keeps the existing card footprint.
+  - Added a session helper to reuse stored builder sessions, optimistic message sending with immediate rendering, and resilient reloads to persist messages per node.
+  - Styled the transcript, composer, and mock Action button to match the approved builder aesthetics while reserving the button for future AI-triggered commands.
+- Verification: Manual code review only; UI wiring relies on the existing `/api/messages` endpoints and session creation logic.
