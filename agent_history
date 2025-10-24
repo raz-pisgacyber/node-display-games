@@ -75,3 +75,12 @@
   - Enabled checkpoint creation without a custom name by generating timestamped labels server-side and capping length for database inserts.
   - Implemented a PATCH `/api/edge` endpoint and sanitised relationship payload handling so autosave can persist relationship note edits reliably.
 - Follow-ups: Verify future work surfaces checkpoint creation errors gracefully in the UI now that backend defaults are in place.
+
+## 2025-10-26
+- Files modified: `core/core.css`, `modules/elements/ElementNode.js`, `modules/project/ProjectNode.js`, `modules/project/project.js`.
+- Completed tasks:
+  - Limited data cards to a viewport-friendly height and enabled internal scrolling while preserving the existing panel styling and animations.
+  - Removed the unused full-text icon from element nodes to keep the icon tray aligned with supported actions.
+  - Expanded project node data cards to mirror the elements builder metadata experience, including editable custom key/value pairs stored in `meta.projectData` with autosave integration.
+  - Seeded new project nodes with default `projectData` so freshly created chapters inherit the enhanced metadata structure.
+- Follow-ups: None noted.

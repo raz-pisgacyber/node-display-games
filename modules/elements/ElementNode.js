@@ -56,7 +56,6 @@ class ElementNode extends NodeBase {
       { label: '📄', action: 'data', title: 'Open data panel' },
       { label: '💬', action: 'discussion', title: 'Open discussion panel' },
       { label: '🔗', action: 'link', title: 'Link this element to another' },
-      { label: '📝', action: 'text', title: 'Open full text editor' },
     ];
   }
 
