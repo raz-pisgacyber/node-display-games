@@ -1,4 +1,6 @@
 import util, { fadeIn, fadeOut, polarToCartesian, randomColor } from './util.js';
+import { ensureSession } from './session.js';
+import { fetchMessages, sendMessage } from '../modules/common/api.js';
 
 let nodeIdCounter = 0;
 
@@ -63,6 +65,8 @@ class NodeBase {
       options?.fullText ?? metaFromOptions.fullText ?? options?.content ?? this.fullText ?? '';
     this.notes = options?.notes ?? metaFromOptions.notes ?? this.notes ?? '';
     this.discussion = options?.discussion ?? metaFromOptions.discussion ?? this.discussion ?? '';
+    this.legacyDiscussion =
+      typeof this.discussion === 'string' && this.discussion.trim() ? this.discussion.trim() : '';
 
     this.meta.notes = this.notes;
     this.meta.discussion = this.discussion;
@@ -89,6 +93,15 @@ class NodeBase {
     this.updateToggleState();
 
     util.log('Node created', this.id, this.title);
+
+    this.discussionMessages = [];
+    this.discussionLoading = false;
+    this.discussionLoadingPromise = null;
+    this.discussionError = '';
+    this.discussionInitialized = false;
+    this.discussionSending = false;
+    this.discussionSilent = false;
+    this.discussionUI = null;
   }
 
   createElement() {
@@ -535,6 +548,9 @@ class NodeBase {
       card.classList.add('visible');
       card.classList.remove('hidden');
       this.positionCard(card);
+      if (type === 'discussion') {
+        this.onDiscussionCardOpened(card);
+      }
       requestAnimationFrame(() => {
         if (NodeBase.openCard === card) {
           this.positionCard(card);
@@ -602,18 +618,7 @@ class NodeBase {
       content.appendChild(notesLabel);
       content.appendChild(notesArea);
     } else if (type === 'discussion') {
-      const discussionArea = document.createElement('textarea');
-      discussionArea.placeholder = 'Collaborate and leave feedback...';
-      discussionArea.value = this.discussion || '';
-      discussionArea.addEventListener('input', (event) => {
-        this.discussion = event.target.value;
-        if (!this.meta || typeof this.meta !== 'object') {
-          this.meta = {};
-        }
-        this.meta.discussion = this.discussion;
-        this.notifyMutation('discussion');
-      });
-      content.appendChild(discussionArea);
+      this.buildDiscussionCard(content);
     } else if (type === 'text') {
       const intro = document.createElement('p');
       intro.textContent = 'Draft the full chapter, scene, or moment here. Changes are saved automatically.';
@@ -640,6 +645,392 @@ class NodeBase {
     host.appendChild(card);
     this.cards[type] = card;
     return card;
+  }
+
+  buildDiscussionCard(container) {
+    container.innerHTML = '';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'discussion-chat';
+
+    const history = document.createElement('div');
+    history.className = 'discussion-chat__history';
+
+    const list = document.createElement('div');
+    list.className = 'discussion-chat__messages';
+    history.appendChild(list);
+
+    const empty = document.createElement('p');
+    empty.className = 'discussion-chat__empty';
+    history.appendChild(empty);
+
+    wrapper.appendChild(history);
+
+    const status = document.createElement('div');
+    status.className = 'discussion-chat__status';
+    wrapper.appendChild(status);
+
+    const composer = document.createElement('div');
+    composer.className = 'discussion-chat__composer';
+
+    const input = document.createElement('textarea');
+    input.className = 'discussion-chat__input';
+    input.rows = 3;
+    composer.appendChild(input);
+
+    const controls = document.createElement('div');
+    controls.className = 'discussion-chat__controls';
+
+    const actionButton = document.createElement('button');
+    actionButton.type = 'button';
+    actionButton.className = 'discussion-chat__action';
+    actionButton.textContent = 'Action';
+    actionButton.title = 'Action shortcuts coming soon';
+    controls.appendChild(actionButton);
+
+    const sendButton = document.createElement('button');
+    sendButton.type = 'button';
+    sendButton.className = 'discussion-chat__send';
+    sendButton.textContent = 'Send';
+    controls.appendChild(sendButton);
+
+    composer.appendChild(controls);
+    wrapper.appendChild(composer);
+
+    container.appendChild(wrapper);
+
+    this.discussionUI = {
+      wrapper,
+      history,
+      list,
+      empty,
+      status,
+      input,
+      sendButton,
+      actionButton,
+    };
+
+    input.addEventListener('input', () => {
+      this.renderDiscussionStatus();
+      this.updateDiscussionComposerState();
+    });
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        this.handleDiscussionSend();
+      }
+    });
+
+    sendButton.addEventListener('click', () => {
+      this.handleDiscussionSend();
+    });
+
+    this.renderDiscussionMessages();
+    this.renderDiscussionStatus();
+    this.updateDiscussionComposerState();
+  }
+
+  onDiscussionCardOpened(card) {
+    if (!card) {
+      return;
+    }
+    if (!this.discussionUI) {
+      const content = card.querySelector('.side-card__content');
+      if (content) {
+        this.buildDiscussionCard(content);
+      }
+    }
+    this.updateDiscussionComposerState();
+    this.renderDiscussionStatus();
+    this.loadDiscussionMessages({ force: true, showSpinner: !this.discussionInitialized });
+  }
+
+  async loadDiscussionMessages({ force = false, showSpinner = true } = {}) {
+    if (this.discussionLoading) {
+      return this.discussionLoadingPromise;
+    }
+    if (!force && this.discussionInitialized) {
+      return this.discussionMessages;
+    }
+    if (!this.projectId) {
+      this.discussionError = 'Project context missing. Unable to load chat history.';
+      this.renderDiscussionStatus();
+      return this.discussionMessages;
+    }
+
+    this.discussionLoading = true;
+    this.discussionSilent = !showSpinner;
+    this.renderDiscussionStatus();
+
+    const promise = (async () => {
+      try {
+        const session = await ensureSession(this.projectId);
+        const messages = await fetchMessages(session.id, { nodeId: this.id, limit: 120 });
+        const ordered = Array.isArray(messages) ? [...messages].reverse() : [];
+        this.discussionMessages = ordered;
+        this.discussionInitialized = true;
+        this.discussionError = '';
+        this.renderDiscussionMessages({ scroll: true });
+        this.updateDiscussionComposerState();
+        return ordered;
+      } catch (error) {
+        console.warn('Failed to load discussion messages', error);
+        this.discussionError = error?.message || 'Failed to load discussion history.';
+        this.renderDiscussionMessages();
+        this.renderDiscussionStatus();
+        return this.discussionMessages;
+      } finally {
+        this.discussionLoading = false;
+        this.discussionSilent = false;
+        this.discussionLoadingPromise = null;
+        this.renderDiscussionStatus();
+      }
+    })();
+
+    this.discussionLoadingPromise = promise;
+    return promise;
+  }
+
+  getRenderableDiscussionMessages() {
+    const messages = Array.isArray(this.discussionMessages) ? this.discussionMessages : [];
+    if (messages.length === 0 && this.legacyDiscussion) {
+      return [
+        {
+          id: 'legacy',
+          role: 'user',
+          content: this.legacyDiscussion,
+          created_at: null,
+          legacy: true,
+        },
+      ];
+    }
+    return messages;
+  }
+
+  getDiscussionRoleClass(role) {
+    if (role === 'user') {
+      return 'discussion-chat__message--user';
+    }
+    if (role === 'tool_result') {
+      return 'discussion-chat__message--tool';
+    }
+    return 'discussion-chat__message--ai';
+  }
+
+  getDiscussionRoleLabel(message) {
+    if (message?.legacy) {
+      return 'Legacy note';
+    }
+    if (message?.optimistic) {
+      return 'Sending…';
+    }
+    switch (message?.role) {
+      case 'user':
+        return 'You';
+      case 'planner':
+        return 'AI Planner';
+      case 'doer':
+        return 'AI Doer';
+      case 'tool_result':
+        return 'Tool';
+      case 'reflector':
+      default:
+        return 'AI';
+    }
+  }
+
+  formatDiscussionTimestamp(value) {
+    if (!value) {
+      return '';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    const now = new Date();
+    const sameDay = date.toDateString() === now.toDateString();
+    const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (sameDay) {
+      return time;
+    }
+    return `${date.toLocaleDateString()} ${time}`;
+  }
+
+  renderDiscussionMessages({ scroll = false } = {}) {
+    if (!this.discussionUI) {
+      return;
+    }
+    const { list, empty } = this.discussionUI;
+    if (!list || !empty) {
+      return;
+    }
+
+    const messages = this.getRenderableDiscussionMessages();
+
+    list.innerHTML = '';
+
+    if (messages.length === 0) {
+      empty.textContent = this.projectId
+        ? 'Start a conversation with your AI collaborator.'
+        : 'Select a project to start chatting.';
+      empty.style.display = 'block';
+    } else {
+      empty.style.display = 'none';
+    }
+
+    messages.forEach((message) => {
+      const item = document.createElement('div');
+      item.className = `discussion-chat__message ${this.getDiscussionRoleClass(message.role)}`;
+      if (message.optimistic) {
+        item.classList.add('discussion-chat__message--pending');
+      }
+
+      const bubble = document.createElement('div');
+      bubble.className = 'discussion-chat__bubble';
+      bubble.textContent = message.content || '';
+      item.appendChild(bubble);
+
+      const label = this.getDiscussionRoleLabel(message);
+      const timestamp = message.optimistic ? '' : this.formatDiscussionTimestamp(message.created_at);
+      if (label || timestamp) {
+        const meta = document.createElement('span');
+        meta.className = 'discussion-chat__meta';
+        if (label && timestamp) {
+          meta.textContent = `${label} · ${timestamp}`;
+        } else if (label) {
+          meta.textContent = label;
+        } else {
+          meta.textContent = timestamp;
+        }
+        item.appendChild(meta);
+      }
+
+      list.appendChild(item);
+    });
+
+    if (scroll) {
+      this.scrollDiscussionToBottom();
+    }
+  }
+
+  renderDiscussionStatus() {
+    if (!this.discussionUI?.status) {
+      return;
+    }
+    const status = this.discussionUI.status;
+    status.textContent = '';
+    status.className = 'discussion-chat__status';
+
+    if (!this.projectId) {
+      status.textContent = 'Project context missing. Chat is unavailable.';
+      status.classList.add('discussion-chat__status--muted');
+      return;
+    }
+
+    if (this.discussionError) {
+      status.textContent = this.discussionError;
+      status.classList.add('discussion-chat__status--error');
+      return;
+    }
+
+    if (this.discussionSending) {
+      status.textContent = 'Sending…';
+      status.classList.add('discussion-chat__status--info');
+      return;
+    }
+
+    if (this.discussionLoading && !this.discussionSilent) {
+      status.textContent = 'Loading conversation…';
+      status.classList.add('discussion-chat__status--info');
+    }
+  }
+
+  updateDiscussionComposerState() {
+    if (!this.discussionUI) {
+      return;
+    }
+    const { input, sendButton } = this.discussionUI;
+    if (!input || !sendButton) {
+      return;
+    }
+    const trimmed = input.value.trim();
+    const canSend = Boolean(trimmed) && !this.discussionSending && Boolean(this.projectId);
+    sendButton.disabled = !canSend;
+    input.disabled = this.discussionSending || !this.projectId;
+    input.placeholder = this.projectId
+      ? 'Chat with your AI co-creator… (Shift+Enter for a new line)'
+      : 'Select a project to start chatting.';
+  }
+
+  scrollDiscussionToBottom() {
+    if (!this.discussionUI?.history) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      const history = this.discussionUI?.history;
+      if (history) {
+        history.scrollTop = history.scrollHeight;
+      }
+    });
+  }
+
+  async handleDiscussionSend() {
+    if (this.discussionSending || !this.discussionUI) {
+      return;
+    }
+    const value = this.discussionUI.input?.value ?? '';
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (!this.projectId) {
+      this.discussionError = 'Project context missing. Unable to send message.';
+      this.renderDiscussionStatus();
+      return;
+    }
+
+    this.discussionUI.input.value = '';
+    this.discussionSending = true;
+    this.discussionError = '';
+    this.updateDiscussionComposerState();
+    this.renderDiscussionStatus();
+
+    let session;
+    try {
+      session = await ensureSession(this.projectId);
+    } catch (error) {
+      console.warn('Failed to establish session for discussion', error);
+      this.discussionError = error?.message || 'Failed to start chat session.';
+      this.discussionSending = false;
+      this.renderDiscussionStatus();
+      this.updateDiscussionComposerState();
+      return;
+    }
+
+    const optimistic = {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      content: trimmed,
+      created_at: new Date().toISOString(),
+      optimistic: true,
+    };
+    this.discussionMessages = [...this.discussionMessages, optimistic];
+    this.renderDiscussionMessages({ scroll: true });
+
+    try {
+      await sendMessage({ sessionId: session.id, nodeId: this.id, role: 'user', content: trimmed });
+      await this.loadDiscussionMessages({ force: true, showSpinner: false });
+    } catch (error) {
+      console.warn('Failed to send discussion message', error);
+      this.discussionMessages = this.discussionMessages.filter((msg) => msg !== optimistic);
+      this.discussionError = error?.message || 'Failed to send message.';
+      this.renderDiscussionMessages();
+    } finally {
+      this.discussionSending = false;
+      this.renderDiscussionStatus();
+      this.updateDiscussionComposerState();
+    }
   }
 
   positionCard(card) {
