@@ -84,3 +84,7 @@
   - Expanded project node data cards to mirror the elements builder metadata experience, including editable custom key/value pairs stored in `meta.projectData` with autosave integration.
   - Seeded new project nodes with default `projectData` so freshly created chapters inherit the enhanced metadata structure.
 - Follow-ups: None noted.
+## 2025-10-27
+- Reviewed Neo4j relationship APIs, autosave link handling, and builder data-card structures to scope two-way linking between project nodes and element nodes.
+- Outlined a plan to add a `GET /api/links` endpoint, share link indexes derived from `/api/graph`, and extend project/element data cards with linked-node lists plus add/remove controls that dispatch `builder:link-mutated` events.
+- Noted follow-ups: implement the backend endpoint, shared link-state helper, UI sections, and adjust autosave listeners so new `project-elements` context propagates without being overwritten.
