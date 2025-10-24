@@ -1,7 +1,15 @@
+import NodeBase from '../../core/nodebase.js';
 import ProjectNode from './ProjectNode.js';
 import util, { enableZoomPan, ensureCanvas, log } from '../../core/util.js';
 import AutosaveManager from '../common/autosaveManager.js';
 import { fetchGraph, createNode, createEdge, createCheckpoint } from '../common/api.js';
+import {
+  initialiseWorkingMemory,
+  setWorkingMemoryProjectStructure,
+  setWorkingMemoryNodeContext,
+  setWorkingMemorySession,
+} from '../common/workingMemory.js';
+import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
 
 const PROJECT_STORAGE_KEY = 'story-graph-project';
 const PROJECT_CONTEXT_STORAGE_KEY = 'story-graph-project-context';
@@ -13,6 +21,111 @@ const STATUS_LABELS = {
   saved: 'Saved',
   error: 'Autosave failed',
 };
+
+function cloneForMemory(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (error) {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneForMemory(item));
+    }
+    if (typeof value === 'object') {
+      const result = {};
+      Object.entries(value).forEach(([key, entry]) => {
+        if (entry === undefined) {
+          return;
+        }
+        if (entry === null) {
+          result[key] = null;
+        } else if (typeof entry === 'object') {
+          result[key] = cloneForMemory(entry);
+        } else if (typeof entry !== 'function') {
+          result[key] = entry;
+        }
+      });
+      return result;
+    }
+    return value;
+  }
+}
+
+function buildNodeContextFromInstance(node) {
+  if (!node) {
+    return null;
+  }
+  const context = {
+    id: node.id,
+    label: node.title || node.meta?.title || '',
+    content: node.fullText || '',
+    meta: cloneForMemory(node.meta || {}),
+  };
+  if (node.projectData) {
+    context.projectData = cloneForMemory(node.projectData);
+  }
+  if (typeof node.notes === 'string') {
+    context.notes = node.notes;
+  }
+  if (Array.isArray(node.children) && node.children.length) {
+    context.children = node.children.map((child) => child.id);
+  }
+  return context;
+}
+
+function buildProjectStructureSnapshot(projectId) {
+  const nodes = [];
+  const edges = [];
+  if (NodeBase?.instances instanceof Map) {
+    NodeBase.instances.forEach((instance) => {
+      if (!instance) {
+        return;
+      }
+      if (projectId && instance.projectId && instance.projectId !== projectId) {
+        return;
+      }
+      const builderType = (instance.meta?.builder || '').toLowerCase();
+      if (builderType && builderType !== 'project') {
+        return;
+      }
+      nodes.push({
+        id: String(instance.id),
+        label: instance.title || '',
+        content: instance.fullText || '',
+        meta: cloneForMemory(instance.meta || {}),
+        project_id: projectId || instance.projectId || '',
+      });
+      if (Array.isArray(instance.children)) {
+        instance.children.forEach((child) => {
+          if (!child) return;
+          if (projectId && child.projectId && child.projectId !== projectId) {
+            return;
+          }
+          edges.push({
+            from: String(instance.id),
+            to: String(child.id),
+            type: 'CHILD_OF',
+            props: { context: 'project' },
+          });
+        });
+      }
+    });
+  }
+  return { project_id: projectId || '', nodes, edges };
+}
+
+function syncWorkingMemoryStructure(projectId) {
+  setWorkingMemoryProjectStructure(buildProjectStructureSnapshot(projectId));
+}
+
+function syncWorkingMemoryNode(node, projectId) {
+  const context = buildNodeContextFromInstance(node);
+  if (context) {
+    setWorkingMemoryNodeContext(context);
+    setWorkingMemorySession({ project_id: projectId || '', active_node_id: context.id });
+  }
+}
 
 const state = {
   projectId: null,
@@ -159,6 +272,8 @@ function handleNodeMutated(event) {
     node.projectId = state.projectId;
   }
   state.autosave?.markNodeDirty(node, reason);
+  syncWorkingMemoryNode(node, state.projectId);
+  syncWorkingMemoryStructure(state.projectId);
 }
 
 function attachNavigationGuard() {
@@ -214,6 +329,8 @@ const init = async (projectId) => {
   const canvas = ensureCanvas(workspace, { width: 2400, height: 2400 });
 
   state.projectId = projectId || null;
+  initialiseWorkingMemory({ projectId: state.projectId });
+  setWorkingMemorySession({ project_id: state.projectId || '' });
   state.statusDot = document.querySelector('[data-status-dot]');
   state.statusLabel = document.querySelector('[data-status-label]');
   state.currentStatus = 'idle';
@@ -253,6 +370,14 @@ const init = async (projectId) => {
       } finally {
         checkpointButton.disabled = false;
       }
+    });
+  }
+
+  const workingMemoryButton = document.querySelector('[data-action="working-memory"]');
+  if (workingMemoryButton) {
+    workingMemoryButton.addEventListener('click', () => {
+      syncWorkingMemoryStructure(state.projectId);
+      openWorkingMemoryViewer();
     });
   }
 
@@ -368,6 +493,8 @@ const init = async (projectId) => {
         console.error('Failed to link child node', edgeError);
         showStatusMessage('Child created but link failed', 'error');
       }
+      syncWorkingMemoryStructure(projectId);
+      syncWorkingMemoryNode(child, projectId);
       return child;
     } catch (error) {
       console.error('Failed to create project child node', error);
@@ -496,6 +623,8 @@ const init = async (projectId) => {
   });
 
   log('Project builder initialised.');
+
+  syncWorkingMemoryStructure(state.projectId);
 
   window.builder = {
     util,

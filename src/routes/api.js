@@ -14,18 +14,6 @@ const {
 } = require('../utils/neo4jHelpers');
 const { upsertNodeVersion, deleteNodeVersion } = require('../utils/nodeVersions');
 const { executeWithLogging, queryWithLogging } = require('../utils/mysqlLogger');
-const {
-  initWorkingMemory,
-  clearWorkingMemory,
-  clearWorkingMemoryByNode,
-  clearWorkingMemoryByProject,
-  updateWorkingMemoryForNode,
-  updateWorkingMemoryForSession,
-  refreshStructureIndexForProject,
-  appendMessageToWorkingMemory,
-  appendMessageToSessionMemories,
-} = require('../memory/workingMemory');
-
 const router = express.Router();
 
 function ensureObject(value) {
@@ -227,11 +215,6 @@ router.post('/node', async (req, res, next) => {
     } finally {
       connection.release();
     }
-    try {
-      await refreshStructureIndexForProject(projectId);
-    } catch (memoryError) {
-      console.warn('Failed to refresh working memory after node creation', memoryError);
-    }
     res.status(201).json(node);
   } catch (error) {
     next(error);
@@ -310,12 +293,6 @@ router.patch('/node/:id', async (req, res, next) => {
     } finally {
       connection.release();
     }
-    try {
-      await refreshStructureIndexForProject(projectId);
-      updateWorkingMemoryForNode(id, { current_node: node });
-    } catch (memoryError) {
-      console.warn('Failed to update working memory after node update', memoryError);
-    }
     res.json(node);
   } catch (error) {
     next(error);
@@ -353,12 +330,6 @@ router.delete('/node/:id', async (req, res, next) => {
     } finally {
       connection.release();
     }
-    try {
-      clearWorkingMemoryByNode(id);
-      await refreshStructureIndexForProject(projectId);
-    } catch (memoryError) {
-      console.warn('Failed to update working memory after node deletion', memoryError);
-    }
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -394,11 +365,6 @@ router.post('/edge', async (req, res, next) => {
       return;
     }
     const edge = result.records[0].get('edge');
-    try {
-      await refreshStructureIndexForProject(projectId);
-    } catch (memoryError) {
-      console.warn('Failed to refresh working memory after edge creation', memoryError);
-    }
     res.status(201).json(edge);
   } catch (error) {
     next(error);
@@ -431,11 +397,6 @@ router.delete('/edge', async (req, res, next) => {
     if (!deleted) {
       res.status(404).json({ error: 'Edge not found' });
       return;
-    }
-    try {
-      await refreshStructureIndexForProject(projectId);
-    } catch (memoryError) {
-      console.warn('Failed to refresh working memory after edge deletion', memoryError);
     }
     res.status(204).end();
   } catch (error) {
@@ -473,11 +434,6 @@ router.patch('/edge', async (req, res, next) => {
       return;
     }
     const edge = result.records[0].get('edge');
-    try {
-      await refreshStructureIndexForProject(projectId);
-    } catch (memoryError) {
-      console.warn('Failed to refresh working memory after edge update', memoryError);
-    }
     res.json(edge);
   } catch (error) {
     next(error);
@@ -695,27 +651,6 @@ router.post('/messages', async (req, res, next) => {
       `INSERT INTO messages (session_id, node_id, role, content) VALUES (?, ?, ?, ?)` ,
       [session_id, node_id, role, content]
     );
-    try {
-      const [rows] = await queryWithLogging(
-        pool,
-        'SELECT id, session_id, node_id, role, content, created_at FROM messages WHERE id = ?',
-        [result.insertId]
-      );
-      const messageRow = rows[0];
-      if (messageRow) {
-        try {
-          if (messageRow.node_id) {
-            appendMessageToWorkingMemory(messageRow.session_id, messageRow.node_id, messageRow);
-          } else {
-            appendMessageToSessionMemories(messageRow.session_id, messageRow);
-          }
-        } catch (memoryError) {
-          console.warn('Failed to append message to working memory', memoryError);
-        }
-      }
-    } catch (fetchError) {
-      console.warn('Failed to load message row for working memory', fetchError);
-    }
     res.status(201).json({ id: result.insertId, session_id, node_id, role, content });
   } catch (error) {
     next(error);
@@ -764,35 +699,6 @@ router.post('/summaries/rollup', async (req, res, next) => {
     );
     const parsedSummary = JSON.parse(summaryJson);
     let memorySummary = { summary: parsedSummary, created_at: new Date().toISOString() };
-    try {
-      const [rows] = await queryWithLogging(
-        pool,
-        'SELECT summary_json, created_at FROM summaries WHERE id = ?',
-        [result.insertId]
-      );
-      const row = rows[0];
-      if (row) {
-        let summaryData = row.summary_json;
-        if (typeof summaryData === 'string') {
-          try {
-            summaryData = JSON.parse(summaryData);
-          } catch (parseError) {
-            summaryData = { text: summaryData };
-          }
-        }
-        memorySummary = {
-          summary: summaryData,
-          created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || memorySummary.created_at,
-        };
-      }
-    } catch (fetchError) {
-      console.warn('Failed to load summary row for working memory', fetchError);
-    }
-    try {
-      updateWorkingMemoryForSession(session_id, { work_history_summary: memorySummary });
-    } catch (memoryError) {
-      console.warn('Failed to update working memory with new summary', memoryError);
-    }
     res.status(201).json({ id: result.insertId, session_id, summary_json: parsedSummary });
   } catch (error) {
     next(error);
@@ -976,11 +882,6 @@ router.post('/checkpoints/:id/restore', async (req, res, next) => {
         [projectId]
       );
       await connection.commit();
-      try {
-        clearWorkingMemoryByProject(projectId);
-      } catch (memoryError) {
-        console.warn('Failed to clear working memory after checkpoint restore', memoryError);
-      }
     } catch (err) {
       await connection.rollback();
       throw err;
@@ -1036,17 +937,6 @@ router.patch('/sessions/:id', async (req, res, next) => {
     if (result.affectedRows === 0) {
       res.status(404).json({ error: 'Session not found' });
       return;
-    }
-    if (active_node !== undefined) {
-      try {
-        if (active_node) {
-          await initWorkingMemory(id, active_node);
-        } else {
-          clearWorkingMemory(id);
-        }
-      } catch (memoryError) {
-        console.warn('Failed to update working memory for session patch', memoryError);
-      }
     }
     res.json({ updated: true });
   } catch (error) {

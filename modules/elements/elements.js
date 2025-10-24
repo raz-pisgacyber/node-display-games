@@ -4,6 +4,13 @@ import { ElementNode, CharacterNode, PlaceNode, OtherNode } from './ElementNode.
 import LinkManager from './LinkManager.js';
 import AutosaveManager from '../common/autosaveManager.js';
 import { fetchGraph, createNode, createCheckpoint } from '../common/api.js';
+import {
+  initialiseWorkingMemory,
+  setWorkingMemoryProjectStructure,
+  setWorkingMemoryNodeContext,
+  setWorkingMemorySession,
+} from '../common/workingMemory.js';
+import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
 
 const PROJECT_STORAGE_KEY = 'story-graph-project';
 const PROJECT_CONTEXT_STORAGE_KEY = 'story-graph-project-context';
@@ -16,6 +23,113 @@ const STATUS_LABELS = {
   error: 'Autosave failed',
 };
 
+function cloneForMemory(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (error) {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneForMemory(item));
+    }
+    if (typeof value === 'object') {
+      const result = {};
+      Object.entries(value).forEach(([key, entry]) => {
+        if (entry === undefined) {
+          return;
+        }
+        if (entry === null) {
+          result[key] = null;
+        } else if (typeof entry === 'object') {
+          result[key] = cloneForMemory(entry);
+        } else if (typeof entry !== 'function') {
+          result[key] = entry;
+        }
+      });
+      return result;
+    }
+    return value;
+  }
+}
+
+function buildNodeContextFromInstance(node) {
+  if (!node) {
+    return null;
+  }
+  const context = {
+    id: node.id,
+    label: node.title || '',
+    content: node.fullText || '',
+    meta: cloneForMemory(node.meta || {}),
+  };
+  if (node.data) {
+    context.data = cloneForMemory(node.data);
+  }
+  if (typeof node.notes === 'string') {
+    context.notes = node.notes;
+  }
+  if (Array.isArray(node.links)) {
+    context.links = Array.from(node.links).map((link) => ({
+      other: link.nodeA === node ? link.nodeB?.id : link.nodeA?.id,
+      notes: link.notes || '',
+    })).filter((item) => item.other);
+  }
+  return context;
+}
+
+function buildElementsStructure(projectId, linkManager) {
+  const payloadNodes = [];
+  if (NodeBase?.instances instanceof Map) {
+    NodeBase.instances.forEach((instance) => {
+      if (!instance) {
+        return;
+      }
+      const builderType = (instance.meta?.builder || '').toLowerCase();
+      if (builderType && builderType !== 'elements') {
+        return;
+      }
+      if (projectId && instance.projectId && instance.projectId !== projectId) {
+        return;
+      }
+      payloadNodes.push({
+        id: String(instance.id),
+        label: instance.title || '',
+        content: instance.fullText || '',
+        meta: cloneForMemory(instance.meta || {}),
+        project_id: projectId || instance.projectId || '',
+      });
+    });
+  }
+  const payloadEdges = [];
+  if (linkManager?.links instanceof Map) {
+    linkManager.links.forEach((link) => {
+      if (!link?.nodeA?.id || !link?.nodeB?.id) {
+        return;
+      }
+      payloadEdges.push({
+        from: String(link.nodeA.id),
+        to: String(link.nodeB.id),
+        type: 'LINKS_TO',
+        props: { context: 'elements', notes: link.notes || '' },
+      });
+    });
+  }
+  return { project_id: projectId || '', nodes: payloadNodes, edges: payloadEdges };
+}
+
+function syncWorkingMemoryStructure(projectId, linkManager) {
+  setWorkingMemoryProjectStructure(buildElementsStructure(projectId, linkManager));
+}
+
+function syncWorkingMemoryNode(node, projectId) {
+  const context = buildNodeContextFromInstance(node);
+  if (context) {
+    setWorkingMemoryNodeContext(context);
+    setWorkingMemorySession({ project_id: projectId || '', active_node_id: context.id });
+  }
+}
+
 const state = {
   projectId: null,
   autosave: null,
@@ -26,6 +140,7 @@ const state = {
   listenersAttached: false,
   lifecycleAttached: false,
   navigationGuardAttached: false,
+  linkManager: null,
 };
 
 function parseProjectContext(raw) {
@@ -161,6 +276,8 @@ function handleNodeMutated(event) {
     node.projectId = state.projectId;
   }
   state.autosave?.markNodeDirty(node, reason);
+  syncWorkingMemoryNode(node, state.projectId);
+  syncWorkingMemoryStructure(state.projectId, state.linkManager);
 }
 
 function handleLinkMutated(event) {
@@ -180,6 +297,7 @@ function handleLinkMutated(event) {
     type: detail.type || 'LINKS_TO',
     props,
   });
+  syncWorkingMemoryStructure(state.projectId, state.linkManager);
 }
 
 function attachNavigationGuard() {
@@ -347,6 +465,8 @@ const init = async (projectId) => {
   const canvas = ensureCanvas(workspace, { width: 2800, height: 2200 });
 
   state.projectId = projectId || null;
+  initialiseWorkingMemory({ projectId: state.projectId });
+  setWorkingMemorySession({ project_id: state.projectId || '' });
   state.statusDot = document.querySelector('[data-status-dot]');
   state.statusLabel = document.querySelector('[data-status-label]');
   state.currentStatus = 'idle';
@@ -381,6 +501,7 @@ const init = async (projectId) => {
 
   const linkManager = new LinkManager(canvas);
   ElementNode.attachLinkManager(linkManager);
+  state.linkManager = linkManager;
 
   const autosave = new AutosaveManager({
     projectId,
@@ -466,6 +587,8 @@ const init = async (projectId) => {
         node.meta = created.meta;
       }
       nodesById.set(node.id, node);
+      syncWorkingMemoryStructure(projectId, linkManager);
+      syncWorkingMemoryNode(node, projectId);
       return node;
     } catch (error) {
       console.error('Failed to create element node', error);
@@ -503,6 +626,14 @@ const init = async (projectId) => {
   const addButton = document.getElementById('add-element');
   if (addButton) {
     addButton.addEventListener('click', openCreationModal);
+  }
+
+  const workingMemoryButton = document.querySelector('[data-action="working-memory"]');
+  if (workingMemoryButton) {
+    workingMemoryButton.addEventListener('click', () => {
+      syncWorkingMemoryStructure(state.projectId, state.linkManager);
+      openWorkingMemoryViewer();
+    });
   }
 
   viewport = enableZoomPan(workspace, canvas, {
@@ -603,6 +734,8 @@ const init = async (projectId) => {
   }
 
   util.log('Elements builder initialised.');
+
+  syncWorkingMemoryStructure(state.projectId, linkManager);
 
   window.builder = {
     util,

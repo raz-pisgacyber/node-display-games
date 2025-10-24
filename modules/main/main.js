@@ -1,3 +1,17 @@
+import {
+  initialiseWorkingMemory,
+  setWorkingMemorySession,
+  setWorkingMemoryProjectStructure,
+  setWorkingMemoryNodeContext,
+  setWorkingMemoryMessages,
+  setWorkingMemoryWorkingHistory,
+  appendWorkingMemoryMessage,
+  getWorkingMemorySettings,
+  updateWorkingMemorySettings,
+  subscribeWorkingMemorySettings,
+} from '../common/workingMemory.js';
+import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
+
 const AUTOSAVE_DELAY = 1600;
 const DEFAULT_VERSION_INTERVAL = 6000;
 const API_BASE = '/api';
@@ -42,9 +56,93 @@ const runtime = {
   nodeElements: new Map(),
   edgeElements: [],
   dragging: null,
+  workingMemorySettingsUnsubscribe: null,
 };
 
-const ui = {};
+const ui = { workingMemoryControls: null };
+
+function ensureWorkingMemorySettingsUI(settings) {
+  if (!ui.workingMemoryPanel) {
+    return null;
+  }
+
+  if (
+    ui.workingMemoryControls &&
+    ui.workingMemoryControls.historyInput &&
+    ui.workingMemoryPanel.contains(ui.workingMemoryControls.historyInput)
+  ) {
+    return ui.workingMemoryControls;
+  }
+
+  ui.workingMemoryPanel.innerHTML = '';
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Working Memory Settings';
+  ui.workingMemoryPanel.appendChild(heading);
+
+  const description = document.createElement('p');
+  description.textContent = 'Control how the local working memory bundle is assembled for the active project.';
+  ui.workingMemoryPanel.appendChild(description);
+
+  const historyField = document.createElement('div');
+  historyField.className = 'field';
+  const historyLabel = document.createElement('label');
+  historyLabel.textContent = 'History length';
+  const historyInput = document.createElement('input');
+  historyInput.type = 'number';
+  historyInput.min = '1';
+  historyInput.max = String(200);
+  historyInput.value = String(settings.history_length || 20);
+  historyInput.addEventListener('change', () => {
+    const parsed = Number.parseInt(historyInput.value, 10);
+    const currentSettings = getWorkingMemorySettings();
+    updateWorkingMemorySettings({ history_length: Number.isNaN(parsed) ? currentSettings.history_length : parsed });
+  });
+  historyField.appendChild(historyLabel);
+  historyField.appendChild(historyInput);
+  ui.workingMemoryPanel.appendChild(historyField);
+
+  const toggleGroup = document.createElement('div');
+  toggleGroup.className = 'toggle-group';
+  const toggleDefinitions = [
+    { key: 'include_project_structure', label: 'Include project structure' },
+    { key: 'include_context', label: 'Include node context' },
+    { key: 'include_working_history', label: 'Include working history' },
+  ];
+  const toggles = {};
+  toggleDefinitions.forEach(({ key, label }) => {
+    const row = document.createElement('label');
+    row.className = 'toggle-row';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = Boolean(settings[key]);
+    checkbox.addEventListener('change', () => {
+      updateWorkingMemorySettings({ [key]: checkbox.checked });
+    });
+    const text = document.createElement('span');
+    text.textContent = label;
+    row.appendChild(checkbox);
+    row.appendChild(text);
+    toggleGroup.appendChild(row);
+    toggles[key] = checkbox;
+  });
+  ui.workingMemoryPanel.appendChild(toggleGroup);
+
+  const actions = document.createElement('div');
+  actions.className = 'working-memory-actions';
+  const viewButton = document.createElement('button');
+  viewButton.type = 'button';
+  viewButton.className = 'secondary-button';
+  viewButton.textContent = 'View working memory';
+  viewButton.addEventListener('click', () => {
+    openWorkingMemoryViewer();
+  });
+  actions.appendChild(viewButton);
+  ui.workingMemoryPanel.appendChild(actions);
+
+  ui.workingMemoryControls = { historyInput, toggles };
+  return ui.workingMemoryControls;
+}
 
 function stableStringify(value) {
   if (Array.isArray(value)) {
@@ -59,6 +157,128 @@ function stableStringify(value) {
 
 function deepEqual(a, b) {
   return stableStringify(a) === stableStringify(b);
+}
+
+function cloneForMemory(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (error) {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneForMemory(item));
+    }
+    if (typeof value === 'object') {
+      const result = {};
+      Object.entries(value).forEach(([key, entry]) => {
+        if (entry === undefined) {
+          return;
+        }
+        if (entry === null) {
+          result[key] = null;
+        } else if (typeof entry === 'object') {
+          result[key] = cloneForMemory(entry);
+        } else if (typeof entry !== 'function') {
+          result[key] = entry;
+        }
+      });
+      return result;
+    }
+    return value;
+  }
+}
+
+function buildProjectStructurePayload() {
+  if (!state.projectId) {
+    return { project_id: '', nodes: [], edges: [] };
+  }
+  const nodes = state.graphNodes.map((node) => ({
+    id: String(node.id),
+    label: node.label || '',
+    content: node.content || '',
+    meta: cloneForMemory(node.meta || {}),
+    project_id: state.projectId,
+  }));
+  const edges = state.graphEdges.map((edge) => ({
+    from: String(edge.from),
+    to: String(edge.to),
+    type: edge.type || 'LINKS_TO',
+    props: cloneForMemory(edge.props || {}),
+  }));
+  return { project_id: state.projectId, nodes, edges };
+}
+
+function syncWorkingMemoryProjectStructure() {
+  const payload = buildProjectStructurePayload();
+  setWorkingMemoryProjectStructure(payload);
+}
+
+function buildNodeContextPayload() {
+  if (!state.draftNode) {
+    return null;
+  }
+  const context = {
+    id: state.draftNode.id,
+    label: state.draftNode.label || '',
+    content: state.draftNode.content || '',
+    meta: cloneForMemory(state.draftNode.meta || {}),
+  };
+  if (state.draftNode.meta?.projectData) {
+    context.projectData = cloneForMemory(state.draftNode.meta.projectData);
+  }
+  return context;
+}
+
+function syncWorkingMemoryNodeContext() {
+  const context = buildNodeContextPayload();
+  if (!context) {
+    setWorkingMemoryNodeContext({});
+    setWorkingMemorySession({ active_node_id: '' });
+    return;
+  }
+  setWorkingMemoryNodeContext(context);
+  setWorkingMemorySession({ active_node_id: context.id });
+}
+
+function syncWorkingMemoryMessages() {
+  const messages = Array.isArray(state.messages)
+    ? state.messages.map((message) => ({
+        id: message.id,
+        session_id: message.session_id,
+        node_id: message.node_id,
+        role: message.role,
+        content: message.content,
+        created_at: message.created_at,
+      }))
+    : [];
+  setWorkingMemoryMessages(messages);
+}
+
+function syncWorkingMemoryWorkingHistory() {
+  if (state.summary && typeof state.summary === 'object' && typeof state.summary.text === 'string') {
+    setWorkingMemoryWorkingHistory(state.summary.text);
+  } else if (typeof state.summary === 'string') {
+    setWorkingMemoryWorkingHistory(state.summary);
+  } else {
+    setWorkingMemoryWorkingHistory('');
+  }
+}
+
+function resetWorkingMemoryForProject(projectId) {
+  initialiseWorkingMemory({ projectId });
+  setWorkingMemoryProjectStructure({ project_id: projectId || '', nodes: [], edges: [] });
+  setWorkingMemoryNodeContext({});
+  setWorkingMemoryMessages([]);
+  setWorkingMemoryWorkingHistory('');
+  setWorkingMemorySession({ project_id: projectId || '', active_node_id: '' });
+}
+
+function syncWorkingMemorySession() {
+  const sessionId = state.session?.id ? String(state.session.id) : '';
+  const projectId = state.projectId || state.session?.project_id || '';
+  const activeNode = state.selectedNodeId || state.session?.active_node || '';
+  setWorkingMemorySession({ session_id: sessionId, project_id: projectId, active_node_id: activeNode });
 }
 
 async function fetchJSON(url, options = {}) {
@@ -434,6 +654,28 @@ function renderSessionPanel() {
   }
 }
 
+function renderWorkingMemorySettings() {
+  if (!ui.workingMemoryPanel) return;
+
+  const settings = getWorkingMemorySettings();
+  const controls = ensureWorkingMemorySettingsUI(settings);
+  if (!controls) {
+    return;
+  }
+
+  const historyValue = String(settings.history_length || 20);
+  if (controls.historyInput !== document.activeElement && controls.historyInput.value !== historyValue) {
+    controls.historyInput.value = historyValue;
+  }
+
+  Object.entries(controls.toggles || {}).forEach(([key, checkbox]) => {
+    const next = Boolean(settings[key]);
+    if (checkbox.checked !== next) {
+      checkbox.checked = next;
+    }
+  });
+}
+
 function renderNodeInspector() {
   if (!ui.nodeInspector) return;
   ui.nodeInspector.innerHTML = '';
@@ -462,6 +704,7 @@ function renderNodeInspector() {
     state.isDirty = true;
     updateAutosaveState('dirty');
     scheduleAutosave();
+    syncWorkingMemoryNodeContext();
   });
   labelField.appendChild(labelLabel);
   labelField.appendChild(labelInput);
@@ -478,6 +721,7 @@ function renderNodeInspector() {
     state.isDirty = true;
     updateAutosaveState('dirty');
     scheduleAutosave();
+    syncWorkingMemoryNodeContext();
   });
   contentField.appendChild(contentLabel);
   contentField.appendChild(contentInput);
@@ -517,6 +761,7 @@ function renderNodeInspector() {
       state.isDirty = true;
       updateAutosaveState('dirty');
       scheduleAutosave();
+      syncWorkingMemoryNodeContext();
       renderNodeInspector();
     });
     const valueInput = document.createElement('input');
@@ -530,6 +775,7 @@ function renderNodeInspector() {
       state.isDirty = true;
       updateAutosaveState('dirty');
       scheduleAutosave();
+      syncWorkingMemoryNodeContext();
     });
     const removeButton = document.createElement('button');
     removeButton.type = 'button';
@@ -542,6 +788,7 @@ function renderNodeInspector() {
       state.isDirty = true;
       updateAutosaveState('dirty');
       scheduleAutosave();
+      syncWorkingMemoryNodeContext();
       renderNodeInspector();
     });
     row.appendChild(keyInput);
@@ -580,6 +827,7 @@ function renderNodeInspector() {
     state.isDirty = true;
     updateAutosaveState('dirty');
     scheduleAutosave();
+    syncWorkingMemoryNodeContext();
     renderNodeInspector();
   });
   newRow.appendChild(newKeyInput);
@@ -1002,6 +1250,7 @@ function refreshUI() {
   renderProjectBadge();
   renderStatus();
   renderErrorBanner();
+  renderWorkingMemorySettings();
   renderSessionPanel();
   renderNodeInspector();
   renderEdgesPanel();
@@ -1032,6 +1281,8 @@ function selectNode(nodeId) {
     state.isDirty = false;
     updateAutosaveState('idle');
   }
+  syncWorkingMemoryNodeContext();
+  syncWorkingMemorySession();
   renderNodeInspector();
   renderEdgesPanel();
   renderGraph();
@@ -1091,6 +1342,8 @@ async function runAutosave() {
       state.graphNodes[index] = updated;
     }
     state.draftNode = cloneNode(updated);
+    syncWorkingMemoryProjectStructure();
+    syncWorkingMemoryNodeContext();
     state.isDirty = false;
     updateAutosaveState('saved');
     renderGraph();
@@ -1214,6 +1467,10 @@ function persistNodePosition(nodeId, position) {
   if (state.draftNode && state.draftNode.id === nodeId) {
     state.draftNode.meta = { ...(state.draftNode.meta || {}), position };
   }
+  syncWorkingMemoryProjectStructure();
+  if (state.draftNode && state.draftNode.id === nodeId) {
+    syncWorkingMemoryNodeContext();
+  }
   if (!state.isDirty) {
     updateAutosaveState('saving');
   }
@@ -1280,6 +1537,7 @@ async function handleAddNode() {
     state.graphNodes.push(created);
     runtime.seededPositions.add(created.id);
     clearErrorBanner();
+    syncWorkingMemoryProjectStructure();
     selectNode(created.id);
     renderGraph();
   } catch (error) {
@@ -1305,6 +1563,7 @@ async function handleDeleteNode() {
       (edge) => edge.from !== state.selectedNodeId && edge.to !== state.selectedNodeId
     );
     runtime.seededPositions.delete(state.selectedNodeId);
+    syncWorkingMemoryProjectStructure();
     selectNode(null);
     clearErrorBanner();
     renderGraph();
@@ -1324,6 +1583,7 @@ async function handleDeleteEdge(edge) {
     });
     state.graphEdges = state.graphEdges.filter((item) => item !== edge);
     clearErrorBanner();
+    syncWorkingMemoryProjectStructure();
     renderGraph();
     renderEdgesPanel();
   } catch (error) {
@@ -1351,6 +1611,7 @@ async function handleAddEdge(event) {
     state.graphEdges.push(created);
     state.newEdgeTarget = '';
     clearErrorBanner();
+    syncWorkingMemoryProjectStructure();
     renderGraph();
     renderEdgesPanel();
   } catch (error) {
@@ -1363,7 +1624,7 @@ async function handleMessageSubmit(event) {
   event.preventDefault();
   if (!state.session || !state.newMessage.trim()) return;
   try {
-    await fetchJSON(`${API_BASE}/messages`, {
+    const created = await fetchJSON(`${API_BASE}/messages`, {
       method: 'POST',
       body: {
         session_id: state.session.id,
@@ -1371,6 +1632,14 @@ async function handleMessageSubmit(event) {
         role: 'user',
         content: state.newMessage.trim(),
       },
+    });
+    appendWorkingMemoryMessage({
+      id: created?.id,
+      session_id: state.session.id,
+      node_id: state.selectedNodeId || null,
+      role: 'user',
+      content: state.newMessage.trim(),
+      created_at: new Date().toISOString(),
     });
     state.newMessage = '';
     clearErrorBanner();
@@ -1398,6 +1667,7 @@ async function handleSaveSummary() {
     state.summary = saved.summary_json;
     state.summaryDraft = '';
     clearErrorBanner();
+    syncWorkingMemoryWorkingHistory();
     renderSessionPanel();
     renderSummaryPanel();
   } catch (error) {
@@ -1446,6 +1716,7 @@ async function refreshMessages() {
     state.messages = [];
     state.messagesStatus = 'idle';
     renderMessagesPanel();
+    setWorkingMemoryMessages([]);
     return;
   }
   state.messagesStatus = 'loading';
@@ -1458,6 +1729,7 @@ async function refreshMessages() {
     const data = await fetchJSON(`${API_BASE}/messages?${params.toString()}`);
     state.messages = (data.messages || []).slice().reverse();
     state.messagesStatus = 'ready';
+    syncWorkingMemoryMessages();
   } catch (error) {
     console.error(error);
     state.messagesStatus = 'error';
@@ -1476,6 +1748,7 @@ async function loadSummary() {
   } catch (error) {
     console.warn('Failed to load summary', error);
   }
+  syncWorkingMemoryWorkingHistory();
   renderSessionPanel();
 }
 
@@ -1509,6 +1782,10 @@ async function loadGraph() {
       }
     }
     clearErrorBanner();
+    syncWorkingMemoryProjectStructure();
+    if (state.draftNode) {
+      syncWorkingMemoryNodeContext();
+    }
   } catch (error) {
     console.error(error);
     setErrorBanner(error?.message || 'Failed to load graph');
@@ -1573,6 +1850,7 @@ function setProjectId(projectId) {
   runtime.seededPositions.clear();
   stopVersionPolling();
   clearAutosaveTimer();
+  resetWorkingMemoryForProject(projectId);
   refreshUI();
   if (projectId) {
     if (state.projectName) {
@@ -1606,11 +1884,13 @@ async function loadSessionForProject(projectId) {
   state.session = null;
   state.sessionError = null;
   renderSessionPanel();
+  syncWorkingMemorySession();
   try {
     const session = await getOrCreateSession(projectId);
     state.session = session;
     state.sessionError = null;
     renderSessionPanel();
+    syncWorkingMemorySession();
     refreshMessages();
     loadSummary();
   } catch (error) {
@@ -1656,6 +1936,7 @@ function initialiseUI() {
         </div>
       </section>
       <aside class="sidebar">
+        <div class="panel" data-working-memory-panel></div>
         <div class="panel" data-session-panel></div>
         <div class="panel" data-node-inspector></div>
         <div class="panel" data-edges-panel></div>
@@ -1674,6 +1955,8 @@ function initialiseUI() {
   ui.projectBadge = root.querySelector('[data-project-badge]');
   ui.graphCanvas = root.querySelector('[data-graph-canvas]');
   ui.graphEmpty = root.querySelector('[data-graph-empty]');
+  ui.workingMemoryPanel = root.querySelector('[data-working-memory-panel]');
+  ui.workingMemoryControls = null;
   ui.sessionPanel = root.querySelector('[data-session-panel]');
   ui.nodeInspector = root.querySelector('[data-node-inspector]');
   ui.edgesPanel = root.querySelector('[data-edges-panel]');
@@ -1690,6 +1973,12 @@ function initialiseUI() {
       selectNode(null);
     }
   });
+
+  if (!runtime.workingMemorySettingsUnsubscribe) {
+    runtime.workingMemorySettingsUnsubscribe = subscribeWorkingMemorySettings(() => {
+      renderWorkingMemorySettings();
+    });
+  }
 
   refreshUI();
 }

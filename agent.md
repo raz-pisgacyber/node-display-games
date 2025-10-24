@@ -1,58 +1,83 @@
 # Working Memory Layer
 
-The working memory store keeps a short-lived, in-process snapshot of the active AI
-session for a given `(session_id, node_id)` pair. It is initialised when a session
-focuses a node, refreshed after each relevant persistence event, and read back when
-assembling the payload for an AI call.
+The working memory snapshot now lives entirely in the browser. It is stored in
+`localStorage` and mirrored in in-process state so the UI can render without
+serialising on every read.
 
-## Data model
+## Storage modules
 
-Each entry is keyed by `session_id::node_id` (with `node_id` falling back to a
-`__global__` token when empty) and currently tracks:
+- `modules/common/workingMemory.js` – owns the canonical snapshot and exposes
+  helper functions for initialisation, mutation, settings management, and
+  subscriptions. The JSON payload is persisted under the
+  `story-graph-working-memory` key.
+- `modules/common/workingMemoryViewer.js` – lightweight overlay that
+  subscribes to the working-memory store and renders a read-only JSON preview.
 
-- `project_id`
-- `current_node` → hydrated node payload (including `content` and parsed `meta`)
-- `structure_index` → graph overview without node `content`
-- `recent_messages` → up to 50 chronological chat records scoped to the node (and
-  session-wide messages when `node_id` is `NULL`)
-- `work_history_summary` → most recent summary record and timestamp
-- `context_data` → mutable object for ad-hoc context expansion
-- `last_user_input` → most recent user-authored message content
-- `created_at` / `updated_at` timestamps for debugging
+## JSON contract
 
-The store is in-memory only. Entries are cleared when the session’s active node is
-unset, when a checkpoint restore replaces the project graph, or when the server
-restarts.
+Working memory always serialises to the following shape:
 
-## Helpers
+```
+{
+  "session": { "session_id": "", "project_id": "", "active_node_id": "", "timestamp": "" },
+  "project_structure": {},
+  "node_context": {},
+  "fetched_context": {},
+  "working_history": "",
+  "messages": [],
+  "last_user_message": "",
+  "config": {
+    "history_length": 20,
+    "include_project_structure": true,
+    "include_context": true,
+    "include_working_history": true
+  }
+}
+```
 
-`src/memory/workingMemory.js` exports the primary management functions:
+- Only `messages` and `working_history` originate from SQL queries. All other
+  fields are sourced from live client state and refreshed as the user edits the
+  project.
+- Sanitisation functions in `workingMemory.js` enforce valid JSON and clamp the
+  history length (max 200) before persisting.
 
-- `initWorkingMemory(sessionId, nodeId)` – bootstrap a fresh entry by querying
-  Neo4j for the target node and full structure index, plus MySQL for messages and
-  summaries.
-- `getWorkingMemory(sessionId, nodeId)` – return a clone of the stored snapshot for
-  safe consumption.
-- `updateWorkingMemory(sessionId, nodeId, updates)` – merge partial updates or
-  functional patches into an existing record.
-- `clearWorkingMemory(sessionId, nodeId)` – drop one entry, all entries for a
-  session, or every stored snapshot when called without identifiers.
-- `refreshStructureIndexForProject(projectId)` – pull a fresh project graph and
-  refresh every entry tied to that project.
-- `appendMessageToWorkingMemory` / `appendMessageToSessionMemories` – record new
-  chat events while keeping the rolling history size bounded.
+## Update helpers
 
-## Integration touchpoints
+`modules/common/workingMemory.js` exposes fine-grained setters so builders can
+refresh one portion of the snapshot without touching the rest:
 
-`src/routes/api.js` now keeps the store in sync by:
+- `initialiseWorkingMemory({ projectId, sessionId, activeNodeId })`
+- `setWorkingMemorySession(partial)`
+- `setWorkingMemoryProjectStructure(structure)`
+- `setWorkingMemoryNodeContext(context)`
+- `setWorkingMemoryFetchedContext(context)`
+- `setWorkingMemoryMessages(messages)`
+- `appendWorkingMemoryMessage(message)`
+- `setWorkingMemoryWorkingHistory(value)`
+- `updateWorkingMemorySettings(partial)` / `getWorkingMemorySettings()`
+- `subscribeWorkingMemory(listener)` / `subscribeWorkingMemorySettings(listener)`
 
-- Initialising or clearing working memory whenever `/sessions/:id` changes its
-  `active_node`.
-- Refreshing structure indexes and updating node snapshots after node/edge
-  mutations or checkpoint restores.
-- Appending messages and updating summaries when `/api/messages` and
-  `/api/summaries/rollup` persist new rows.
+All setters merge into the in-memory copy, normalise input, persist to
+`localStorage`, and broadcast to subscribers so the viewer stays in sync.
 
-Future AI orchestration can call `getWorkingMemory` before composing a prompt,
-merge any tool-sourced context via `updateWorkingMemory`, and rely on the data
-layer to keep the cache coherent in the background.
+## Builder integration
+
+- **Main builder (`modules/main/main.js`)** keeps project structure, selected
+  node context, messages, summaries, and session metadata aligned with the
+  snapshot. The Working Memory Settings panel writes directly to the settings
+  store and avoids destroying focused inputs on refresh.
+- **Project builder (`modules/project/project.js`)** and **Elements builder
+  (`modules/elements/elements.js`)** push graph and node updates into the store
+  whenever nodes are selected or mutated. Each toolbar exposes a Working Memory
+  icon that opens the shared viewer modal for debugging.
+
+When any builder loads a project, it calls `initialiseWorkingMemory` with the
+project id so the snapshot starts with a clean structure and reflects the
+current session.
+
+## Settings persistence
+
+Global working-memory settings are stored separately under the
+`story-graph-working-memory-settings` key. Toggling these options immediately
+updates the live snapshot (e.g. clearing `project_structure` when disabled) so
+subscribers never see stale data.
