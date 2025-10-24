@@ -111,3 +111,14 @@
   - Added a session helper to reuse stored builder sessions, optimistic message sending with immediate rendering, and resilient reloads to persist messages per node.
   - Styled the transcript, composer, and mock Action button to match the approved builder aesthetics while reserving the button for future AI-triggered commands.
 - Verification: Manual code review only; UI wiring relies on the existing `/api/messages` endpoints and session creation logic.
+
+## 2025-10-29
+- Files modified: `src/memory/workingMemory.js`, `src/routes/api.js`, `agent.md`.
+- Implemented an in-memory working memory layer that initialises per-session/node
+  snapshots from Neo4j and MySQL, maintains indexes for fast updates, and exposes
+  helpers for retrieving, updating, and clearing context.
+- Hooked API routes to keep working memory in sync after node/edge mutations,
+  message inserts, summary rollups, session focus changes, and checkpoint restores,
+  so AI orchestration can pull a current context bundle before each prompt.
+- Documented the working memory lifecycle and helper functions in `agent.md` for
+  future maintainers.
