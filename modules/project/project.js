@@ -326,6 +326,11 @@ const init = async (projectId) => {
       fullText: '',
       childOrbit: Math.max(160, (parent.childOrbit ?? 220) * 0.78),
       pyramidSpacing: { ...parent.pyramidSpacing },
+      projectData: {
+        title: label,
+        notes: '',
+        customFields: [],
+      },
     };
     try {
       const created = await createNode({ label, content: '', meta }, { projectId });
@@ -392,6 +397,11 @@ const init = async (projectId) => {
           notes: '',
           discussion: '',
           fullText: '',
+          projectData: {
+            title: 'Project',
+            notes: '',
+            customFields: [],
+          },
         },
       };
       try {

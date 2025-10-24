@@ -406,6 +406,11 @@ body {
   z-index: 10;
 }
 
+.side-card[data-type='data'] {
+  max-height: min(560px, calc(100vh - 48px));
+  overflow: hidden;
+}
+
 .side-card.hidden {
   opacity: 0;
   pointer-events: none;
@@ -450,6 +455,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.side-card[data-type='data'] .side-card__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .side-card__content label {
