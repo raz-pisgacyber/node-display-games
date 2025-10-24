@@ -53,6 +53,24 @@ function cloneForMemory(value) {
   }
 }
 
+function buildWorkingMemoryMeta(meta = {}, extras = {}) {
+  const source = meta && typeof meta === 'object' ? meta : {};
+  const result = {};
+  const builder = source.builder ?? extras.builder;
+  if (builder) {
+    result.builder = builder;
+  }
+  const notes = extras.notes ?? source.notes;
+  if (typeof notes === 'string' && notes.trim()) {
+    result.notes = notes;
+  }
+  const projectData = source.projectData ?? extras.projectData;
+  if (projectData && typeof projectData === 'object') {
+    result.projectData = cloneForMemory(projectData);
+  }
+  return result;
+}
+
 function buildNodeContextFromInstance(node) {
   if (!node) {
     return null;
@@ -60,21 +78,12 @@ function buildNodeContextFromInstance(node) {
   const context = {
     id: node.id,
     label: node.title || '',
-    content: node.fullText || '',
-    meta: cloneForMemory(node.meta || {}),
+    meta: buildWorkingMemoryMeta(node.meta || {}, {
+      notes: typeof node.notes === 'string' ? node.notes : node.meta?.notes,
+      projectData: node.meta?.projectData ?? node.data,
+      builder: node.meta?.builder || 'elements',
+    }),
   };
-  if (node.data) {
-    context.data = cloneForMemory(node.data);
-  }
-  if (typeof node.notes === 'string') {
-    context.notes = node.notes;
-  }
-  if (Array.isArray(node.links)) {
-    context.links = Array.from(node.links).map((link) => ({
-      other: link.nodeA === node ? link.nodeB?.id : link.nodeA?.id,
-      notes: link.notes || '',
-    })).filter((item) => item.other);
-  }
   return context;
 }
 
@@ -95,9 +104,11 @@ function buildElementsStructure(projectId, linkManager) {
       payloadNodes.push({
         id: String(instance.id),
         label: instance.title || '',
-        content: instance.fullText || '',
-        meta: cloneForMemory(instance.meta || {}),
-        project_id: projectId || instance.projectId || '',
+        meta: buildWorkingMemoryMeta(instance.meta || {}, {
+          notes: typeof instance.notes === 'string' ? instance.notes : instance.meta?.notes,
+          projectData: instance.meta?.projectData ?? instance.data,
+          builder: instance.meta?.builder || 'elements',
+        }),
       });
     });
   }
@@ -111,14 +122,16 @@ function buildElementsStructure(projectId, linkManager) {
         from: String(link.nodeA.id),
         to: String(link.nodeB.id),
         type: 'LINKS_TO',
-        props: { context: 'elements', notes: link.notes || '' },
       });
     });
   }
-  return { project_id: projectId || '', nodes: payloadNodes, edges: payloadEdges };
+  return { nodes: payloadNodes, edges: payloadEdges };
 }
 
 function syncWorkingMemoryStructure(projectId, linkManager) {
+  if (projectId) {
+    setWorkingMemorySession({ project_id: projectId });
+  }
   setWorkingMemoryProjectStructure(buildElementsStructure(projectId, linkManager));
 }
 
@@ -141,6 +154,7 @@ const state = {
   lifecycleAttached: false,
   navigationGuardAttached: false,
   linkManager: null,
+  nodeInteractionAttached: false,
 };
 
 function parseProjectContext(raw) {
@@ -343,6 +357,36 @@ function attachLifecycleHooks() {
   state.lifecycleAttached = true;
 }
 
+function handleLastInteractedNodeEvent(event) {
+  const detail = event?.detail || {};
+  const builder = typeof detail.builder === 'string' ? detail.builder.toLowerCase() : '';
+  if (builder && builder !== 'elements') {
+    return;
+  }
+  const nodeId = detail.nodeId ? String(detail.nodeId) : '';
+  if (!nodeId) {
+    setWorkingMemoryNodeContext({});
+    setWorkingMemorySession({ active_node_id: '' });
+    return;
+  }
+  const node = NodeBase.getLastInteractedNode?.();
+  if (!node || String(node.id) !== nodeId) {
+    return;
+  }
+  if (state.projectId && node.projectId && node.projectId !== state.projectId) {
+    return;
+  }
+  syncWorkingMemoryNode(node, state.projectId);
+}
+
+function attachNodeInteractionTracker() {
+  if (state.nodeInteractionAttached) {
+    return;
+  }
+  window.addEventListener('nodebase:last-interacted', handleLastInteractedNodeEvent);
+  state.nodeInteractionAttached = true;
+}
+
 const createElementModal = ({ onSubmit, onClose } = {}) => {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -516,6 +560,7 @@ const init = async (projectId) => {
   }
   attachNavigationGuard();
   attachLifecycleHooks();
+  attachNodeInteractionTracker();
 
   const checkpointButton = document.querySelector('[data-action="save-checkpoint"]');
   if (checkpointButton) {
@@ -631,8 +676,14 @@ const init = async (projectId) => {
   const workingMemoryButton = document.querySelector('[data-action="working-memory"]');
   if (workingMemoryButton) {
     workingMemoryButton.addEventListener('click', () => {
+      const lastNode = NodeBase.getLastInteractedNode?.();
       syncWorkingMemoryStructure(state.projectId, state.linkManager);
-      openWorkingMemoryViewer();
+      if (lastNode && (!state.projectId || lastNode.projectId === state.projectId)) {
+        syncWorkingMemoryNode(lastNode, state.projectId);
+      }
+      const activeId = lastNode?.id || '';
+      setWorkingMemorySession({ project_id: state.projectId || '', active_node_id: activeId });
+      openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeId });
     });
   }
 

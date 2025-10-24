@@ -6,6 +6,7 @@ const viewerState = {
   content: null,
   unsubscribe: null,
   keyHandler: null,
+  options: {},
 };
 
 function ensureViewer() {
@@ -39,7 +40,7 @@ function ensureViewer() {
 
   const content = document.createElement('pre');
   content.className = 'working-memory-modal__content';
-  content.textContent = serialiseWorkingMemory();
+  content.textContent = serialiseWorkingMemory(viewerState.options);
 
   modal.appendChild(header);
   modal.appendChild(content);
@@ -47,7 +48,7 @@ function ensureViewer() {
   document.body.appendChild(overlay);
 
   const update = () => {
-    content.textContent = serialiseWorkingMemory();
+    content.textContent = serialiseWorkingMemory(viewerState.options);
   };
 
   viewerState.unsubscribe = subscribeWorkingMemory(update);
@@ -78,16 +79,17 @@ function ensureViewer() {
   return viewerState;
 }
 
-export function openWorkingMemoryViewer() {
+export function openWorkingMemoryViewer(options = {}) {
   const { overlay, modal } = ensureViewer();
   if (!overlay || !modal) {
     return;
   }
+  viewerState.options = { ...options };
+  if (viewerState.content) {
+    viewerState.content.textContent = serialiseWorkingMemory(viewerState.options);
+  }
   overlay.classList.add('visible');
   modal.focus({ preventScroll: true });
-  if (viewerState.content) {
-    viewerState.content.textContent = serialiseWorkingMemory();
-  }
 }
 
 export function closeWorkingMemoryViewer() {
@@ -116,4 +118,5 @@ export function destroyWorkingMemoryViewer() {
   viewerState.overlay = null;
   viewerState.modal = null;
   viewerState.content = null;
+  viewerState.options = {};
 }
