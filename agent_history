@@ -122,3 +122,14 @@
   so AI orchestration can pull a current context bundle before each prompt.
 - Documented the working memory lifecycle and helper functions in `agent.md` for
   future maintainers.
+
+## 2025-10-29
+- Removed the Node.js working memory module and scrubbed API refresh hooks so the server no longer tracks in-process memory.
+- Added a shared front-end working memory store with configurable settings, a viewer modal, and settings panel in the main builder.
+- Wired the main, project, and elements builders to update the local working memory JSON in response to graph edits, node context changes, and messaging/summaries.
+## 2025-10-30 14:30 UTC
+- Files modified: `modules/main/main.js`, `agent.md`, `AGENTS.md`, `agent_history`.
+- Completed tasks:
+  - Refactored the Working Memory Settings panel to build controls once and update values in place, preventing focus loss while settings refresh.
+  - Replaced `agent.md` with documentation that reflects the browser-managed working memory store, helper APIs, and builder integration patterns.
+  - Logged the stability fix in `AGENTS.md` and this history file for future context.

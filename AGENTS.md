@@ -61,3 +61,7 @@ Resolved Neo4j write access errors by ensuring the `/api/links` fetch runs throu
 Confirmed link creation and retrieval routes now operate without triggering read-only transaction failures.
 ## [2025-10-28 22:00:00] - codex
 Converted node discussion cards into chat-driven panels backed by `/api/messages`, added optimistic user sends with persistent history reloads, and introduced a mock Action control for upcoming AI commands while keeping the builder visuals intact.
+## [2025-10-29 21:00 UTC] - codex
+Migrated working memory to a browser-managed store, introduced a Working Memory Settings panel plus viewer, and removed the server-side workingMemory module while teaching all builders to keep the local JSON snapshot synced with project, node, and message updates.
+## [2025-10-30 14:30 UTC] - codex
+Stabilised the Working Memory Settings panel so inputs stay focused during live updates and refreshed `agent.md` to document the browser-side store, helper APIs, and viewer integration.

@@ -272,6 +272,13 @@ button[disabled] {
   margin: 0;
 }
 
+.panel p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -318,6 +325,35 @@ textarea {
 .meta-empty {
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+.toggle-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.toggle-row input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
+.toggle-row span {
+  color: var(--muted);
+}
+
+.working-memory-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .status-indicator {
