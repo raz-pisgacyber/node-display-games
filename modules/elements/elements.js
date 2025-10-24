@@ -526,6 +526,21 @@ const init = async (projectId) => {
     const graph = await fetchGraph(projectId);
     const nodes = graph?.nodes || [];
     const edges = graph?.edges || [];
+    const availableProjects = nodes
+      .filter((node) => (node.meta?.builder || '').toLowerCase() === 'project')
+      .map((nodeData) => {
+        const meta = nodeData.meta || {};
+        const label =
+          nodeData.label ||
+          meta.title ||
+          meta.projectData?.title ||
+          (typeof nodeData.id === 'string' ? nodeData.id : String(nodeData.id));
+        return {
+          id: nodeData.id,
+          label,
+        };
+      });
+    ElementNode.setAvailableProjectNodes(availableProjects, projectId);
     nodes
       .filter((node) => (node.meta?.builder || '').toLowerCase() === 'elements')
       .forEach((nodeData) => {

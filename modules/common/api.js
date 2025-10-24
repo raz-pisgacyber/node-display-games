@@ -102,6 +102,37 @@ export async function updateEdge(payload, { projectId, keepalive } = {}) {
   });
 }
 
+export async function fetchLinks(nodeId, { projectId, type } = {}) {
+  if (!nodeId) {
+    throw new Error('nodeId is required');
+  }
+  const params = new URLSearchParams();
+  params.set('node_id', nodeId);
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  if (type) {
+    params.set('type', type);
+  }
+  return fetchJSON(`/api/links?${params.toString()}`);
+}
+
+export async function createLink(payload, { projectId, keepalive } = {}) {
+  return fetchJSON('/api/link', {
+    method: 'POST',
+    body: withProjectId(payload, projectId),
+    keepalive,
+  });
+}
+
+export async function deleteLink(payload, { projectId, keepalive } = {}) {
+  return fetchJSON('/api/link', {
+    method: 'DELETE',
+    body: withProjectId(payload, projectId),
+    keepalive,
+  });
+}
+
 export async function createCheckpoint(projectId, name) {
   const body = { project_id: projectId };
   if (name) {

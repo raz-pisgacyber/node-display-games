@@ -43,3 +43,8 @@ Finalised autosave backend integration by allowing checkpoint creation without a
 Summary of work completed: Studied current node/edge persistence, autosave flows, and data-card rendering in both builders to prepare a plan for bidirectional project↔element linking with Neo4j relationships.
 Key implementation details or architectural notes: Plan proposes introducing a read-only `GET /api/links` endpoint alongside the existing edge mutations, building shared link indexes from `/api/graph` payloads, rendering linked-node sections with add/remove controls inside project and element data cards, and dispatching `builder:link-mutated` events so autosave queues the relationship writes via the existing `/api/edge` endpoints.
 Next steps or handoff notes: Implement the documented backend endpoint, link-state helpers, and UI controls; adjust autosave listeners to preserve the new `project-elements` context when queueing link mutations.
+## [2025-10-27 18:46:59] - codex
+Implemented two-way linking between Project and Elements builders.
+Added /api/link, /api/links, and /api/link deletion endpoints.
+Integrated link listing and management into both data cards using existing UI patterns.
+Maintained full design consistency and autosave integration.

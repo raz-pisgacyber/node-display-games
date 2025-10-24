@@ -88,3 +88,12 @@
 - Reviewed Neo4j relationship APIs, autosave link handling, and builder data-card structures to scope two-way linking between project nodes and element nodes.
 - Outlined a plan to add a `GET /api/links` endpoint, share link indexes derived from `/api/graph`, and extend project/element data cards with linked-node lists plus add/remove controls that dispatch `builder:link-mutated` events.
 - Noted follow-ups: implement the backend endpoint, shared link-state helper, UI sections, and adjust autosave listeners so new `project-elements` context propagates without being overwritten.
+
+## 2025-10-27 18:46 UTC
+- Files modified: `src/routes/api.js`, `modules/common/api.js`, `modules/project/ProjectNode.js`, `modules/project/project.js`, `modules/elements/ElementNode.js`, `modules/elements/elements.js`.
+- Completed tasks:
+  - Added `/api/links`, `/api/link` (POST), and `/api/link` (DELETE) endpoints that scope relationships by project, merge undirected `LINKS_TO` records, and return grouped link summaries for UI consumption.
+  - Expanded shared API utilities with `fetchLinks`, `createLink`, and `deleteLink` helpers to keep builders aligned with existing request patterns.
+  - Extended project data cards with a Linked Elements section that lists, adds, and removes element relationships using existing card styling and live refreshes.
+  - Mirrored the functionality in elements data cards so linked project nodes can be reviewed and maintained from the elements builder with matching controls.
+- Follow-ups: Consider refreshing available element/project indexes when new nodes are created after initial load so selectors stay in sync without a full reload.
