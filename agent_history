@@ -61,3 +61,17 @@
   - Added REST endpoints for listing, creating, and retrieving projects plus ensured schema creation for the `projects` table during MySQL bootstrap.
   - Updated builder UIs to surface active project name/ID, added "Back to Hub" navigation, and synced context labels across toolbars and the main graph workspace.
 - Follow-ups: Consider adding project renaming/deletion flows and surfacing project metadata errors in the hub UI.
+## 2025-10-24
+- Files modified: `AGENTS.md`, `agent_history`, `core/core.css`, `core/nodebase.js`, `modules/common/api.js`, `modules/common/autosaveManager.js`, `modules/elements/ElementNode.js`, `modules/elements/LinkManager.js`, `modules/elements/elements.html`, `modules/elements/elements.js`, `modules/project/ProjectNode.js`, `modules/project/project.html`, `modules/project/project.js`.
+- Completed tasks:
+  - Implemented shared autosave infrastructure for project and elements builders with debounced PATCH `/api/node` updates, link persistence, and keepalive flushes on navigation and visibility changes.
+  - Hooked builder UIs to POST `/api/checkpoints`, added Save Checkpoint controls, and wired status indicators without altering approved visuals.
+  - Centralised builder metadata handling in `NodeBase`, ensured element/project node payloads serialise correctly, and documented the non-negotiable builder design rule in `AGENTS.md`.
+- Follow-ups: Consider adding UI to restore checkpoints from within the hub and enriching error feedback for failed checkpoint or autosave operations.
+## 2025-10-25
+- Files modified: `AGENTS.md`, `agent_history`, `src/routes/api.js`.
+- Completed tasks:
+  - Added utility guidance requiring agents to maintain the Agent History log and preserve builder visuals, recording the update within `AGENTS.md`.
+  - Enabled checkpoint creation without a custom name by generating timestamped labels server-side and capping length for database inserts.
+  - Implemented a PATCH `/api/edge` endpoint and sanitised relationship payload handling so autosave can persist relationship note edits reliably.
+- Follow-ups: Verify future work surfaces checkpoint creation errors gracefully in the UI now that backend defaults are in place.

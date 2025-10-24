@@ -2,9 +2,31 @@ import NodeBase from '../../core/nodebase.js';
 import util, { enableZoomPan, ensureCanvas } from '../../core/util.js';
 import { ElementNode, CharacterNode, PlaceNode, OtherNode } from './ElementNode.js';
 import LinkManager from './LinkManager.js';
+import AutosaveManager from '../common/autosaveManager.js';
+import { fetchGraph, createNode, createCheckpoint } from '../common/api.js';
 
 const PROJECT_STORAGE_KEY = 'story-graph-project';
 const PROJECT_CONTEXT_STORAGE_KEY = 'story-graph-project-context';
+
+const STATUS_LABELS = {
+  idle: 'Idle',
+  dirty: 'Editing…',
+  saving: 'Saving…',
+  saved: 'Saved',
+  error: 'Autosave failed',
+};
+
+const state = {
+  projectId: null,
+  autosave: null,
+  statusDot: null,
+  statusLabel: null,
+  statusOverrideTimer: null,
+  currentStatus: 'idle',
+  listenersAttached: false,
+  lifecycleAttached: false,
+  navigationGuardAttached: false,
+};
 
 function parseProjectContext(raw) {
   if (!raw) return null;
@@ -78,6 +100,129 @@ function applyProjectInfo() {
     window.localStorage.setItem(PROJECT_STORAGE_KEY, projectId);
   }
   return projectId;
+}
+
+function updateStatusIndicator(status) {
+  if (!state.statusDot || !state.statusLabel) {
+    return;
+  }
+  const classList = ['status-dot'];
+  if (status === 'saving') {
+    classList.push('saving');
+  } else if (status === 'saved') {
+    classList.push('saved');
+  } else if (status === 'error') {
+    classList.push('error');
+  }
+  state.statusDot.className = classList.join(' ');
+  state.statusLabel.textContent = STATUS_LABELS[status] || STATUS_LABELS.idle;
+}
+
+function handleStatusChange(status) {
+  state.currentStatus = status;
+  if (state.statusOverrideTimer) {
+    return;
+  }
+  updateStatusIndicator(status);
+}
+
+function showStatusMessage(message, type = 'saved') {
+  if (!state.statusDot || !state.statusLabel) {
+    return;
+  }
+  if (state.statusOverrideTimer) {
+    window.clearTimeout(state.statusOverrideTimer);
+    state.statusOverrideTimer = null;
+  }
+  const classList = ['status-dot'];
+  if (type === 'error') {
+    classList.push('error');
+  } else if (type === 'saved') {
+    classList.push('saved');
+  }
+  state.statusDot.className = classList.join(' ');
+  state.statusLabel.textContent = message;
+  state.statusOverrideTimer = window.setTimeout(() => {
+    state.statusOverrideTimer = null;
+    updateStatusIndicator(state.currentStatus);
+  }, 2400);
+}
+
+function handleNodeMutated(event) {
+  const detail = event?.detail || {};
+  const { node, reason } = detail;
+  if (!node) {
+    return;
+  }
+  if (state.projectId && node.projectId && node.projectId !== state.projectId) {
+    return;
+  }
+  if (!node.projectId) {
+    node.projectId = state.projectId;
+  }
+  state.autosave?.markNodeDirty(node, reason);
+}
+
+function handleLinkMutated(event) {
+  const detail = event?.detail || {};
+  if (!detail.action || !detail.from || !detail.to) {
+    return;
+  }
+  const eventProject = detail.projectId || state.projectId;
+  if (state.projectId && eventProject && eventProject !== state.projectId) {
+    return;
+  }
+  const props = { ...(detail.props || {}), context: 'elements' };
+  state.autosave?.markLinkChange({
+    action: detail.action,
+    from: detail.from,
+    to: detail.to,
+    type: detail.type || 'LINKS_TO',
+    props,
+  });
+}
+
+function attachNavigationGuard() {
+  if (state.navigationGuardAttached) {
+    return;
+  }
+  const backLink = document.querySelector('.toolbar-back');
+  if (!backLink) {
+    return;
+  }
+  backLink.addEventListener('click', (event) => {
+    if (!state.autosave?.hasPending()) {
+      return;
+    }
+    event.preventDefault();
+    const target = backLink.href;
+    state.autosave
+      ?.flush()
+      .catch((error) => {
+        console.warn('Failed to flush autosave before navigation', error);
+      })
+      .finally(() => {
+        window.location.href = target;
+      });
+  });
+  state.navigationGuardAttached = true;
+}
+
+function attachLifecycleHooks() {
+  if (state.lifecycleAttached) {
+    return;
+  }
+  window.addEventListener('beforeunload', () => {
+    if (state.autosave?.hasPending()) {
+      state.autosave.flush({ keepalive: true });
+    }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      state.autosave?.flush({ keepalive: true });
+    }
+  });
+  state.lifecycleAttached = true;
 }
 
 const createElementModal = ({ onSubmit, onClose } = {}) => {
@@ -180,7 +325,10 @@ const createElementModal = ({ onSubmit, onClose } = {}) => {
       return;
     }
     const type = typeSelect.value;
-    onSubmit?.({ name, type });
+    const result = onSubmit?.({ name, type });
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => console.warn('Element creation request rejected', error));
+    }
     teardown();
   });
 
@@ -189,7 +337,7 @@ const createElementModal = ({ onSubmit, onClose } = {}) => {
   return { close: teardown };
 };
 
-const init = () => {
+const init = async (projectId) => {
   const workspace = document.getElementById('workspace');
   if (!workspace) {
     util.log('Workspace element missing for elements builder.');
@@ -197,6 +345,13 @@ const init = () => {
   }
 
   const canvas = ensureCanvas(workspace, { width: 2800, height: 2200 });
+
+  state.projectId = projectId || null;
+  state.statusDot = document.querySelector('[data-status-dot]');
+  state.statusLabel = document.querySelector('[data-status-label]');
+  state.currentStatus = 'idle';
+  state.statusOverrideTimer = null;
+  updateStatusIndicator('idle');
 
   const layout = {
     centerX: canvas.offsetWidth / 2,
@@ -207,6 +362,7 @@ const init = () => {
   };
 
   const elementNodes = [];
+  const nodesById = new Map();
 
   const layoutNodes = () => {
     elementNodes.forEach((node, index) => {
@@ -226,19 +382,56 @@ const init = () => {
   const linkManager = new LinkManager(canvas);
   ElementNode.attachLinkManager(linkManager);
 
+  const autosave = new AutosaveManager({
+    projectId,
+    onStatusChange: handleStatusChange,
+  });
+  state.autosave = autosave;
+
+  if (!state.listenersAttached) {
+    document.addEventListener('builder:node-mutated', handleNodeMutated);
+    document.addEventListener('builder:link-mutated', handleLinkMutated);
+    state.listenersAttached = true;
+  }
+  attachNavigationGuard();
+  attachLifecycleHooks();
+
+  const checkpointButton = document.querySelector('[data-action="save-checkpoint"]');
+  if (checkpointButton) {
+    checkpointButton.addEventListener('click', async () => {
+      if (!state.projectId) {
+        return;
+      }
+      checkpointButton.disabled = true;
+      try {
+        await state.autosave?.flush();
+        await createCheckpoint(state.projectId);
+        showStatusMessage('Checkpoint saved', 'saved');
+      } catch (error) {
+        console.error('Failed to save checkpoint', error);
+        showStatusMessage('Checkpoint failed', 'error');
+      } finally {
+        checkpointButton.disabled = false;
+      }
+    });
+  }
+
   let activeModal = null;
   let viewport;
 
-  const createElementNode = ({ name, type }) => {
+  const createElementNode = async ({ name, type }) => {
     const normalizedType = ElementNode.normaliseType(type);
     const node = ElementNode.createNode(normalizedType, {
       canvas,
       title: name,
       x: layout.centerX,
       y: layout.centerY,
+      projectId,
     });
+    node.projectId = projectId;
     node.manualPosition = false;
     elementNodes.push(node);
+    nodesById.set(node.id, node);
     layoutNodes();
     NodeBase.setLastInteractedNode(node);
     if (elementNodes.length === 1 && viewport) {
@@ -250,7 +443,42 @@ const init = () => {
         }
       );
     }
-    return node;
+
+    const payload = node.toPersistence();
+    try {
+      const created = await createNode(
+        { label: payload.label, content: payload.content, meta: payload.meta },
+        { projectId }
+      );
+      if (created?.id && created.id !== node.id) {
+        const previousId = node.id;
+        nodesById.delete(previousId);
+        node.id = created.id;
+        if (node.element) {
+          node.element.dataset.nodeId = node.id;
+        }
+        if (NodeBase.instances instanceof Map) {
+          NodeBase.instances.delete(previousId);
+          NodeBase.instances.set(node.id, node);
+        }
+      }
+      if (created?.meta) {
+        node.meta = created.meta;
+      }
+      nodesById.set(node.id, node);
+      return node;
+    } catch (error) {
+      console.error('Failed to create element node', error);
+      nodesById.delete(node.id);
+      const index = elementNodes.indexOf(node);
+      if (index >= 0) {
+        elementNodes.splice(index, 1);
+      }
+      NodeBase.unregisterInstance(node);
+      node.element?.remove();
+      showStatusMessage('Element creation failed', 'error');
+      throw error;
+    }
   };
 
   const openCreationModal = () => {
@@ -258,9 +486,13 @@ const init = () => {
       return;
     }
     activeModal = createElementModal({
-      onSubmit: ({ name, type }) => {
-        const node = createElementNode({ name, type });
-        NodeBase.setLastInteractedNode(node);
+      onSubmit: async ({ name, type }) => {
+        try {
+          const node = await createElementNode({ name, type });
+          NodeBase.setLastInteractedNode(node);
+        } catch (error) {
+          // Error already handled in createElementNode
+        }
       },
       onClose: () => {
         activeModal = null;
@@ -289,6 +521,72 @@ const init = () => {
     );
   });
 
+  linkManager.setEventSuppression(true);
+  try {
+    const graph = await fetchGraph(projectId);
+    const nodes = graph?.nodes || [];
+    const edges = graph?.edges || [];
+    nodes
+      .filter((node) => (node.meta?.builder || '').toLowerCase() === 'elements')
+      .forEach((nodeData) => {
+        const meta = nodeData.meta || {};
+        const type = ElementNode.normaliseType(meta.elementType || meta.type || 'other');
+        const position = meta.position;
+        const node = ElementNode.createNode(type, {
+          canvas,
+          id: nodeData.id,
+          title: nodeData.label || meta.title || nodeData.id,
+          x: position?.x ?? layout.centerX,
+          y: position?.y ?? layout.centerY,
+          notes: meta.notes || '',
+          discussion: meta.discussion || '',
+          fullText: meta.fullText ?? nodeData.content ?? '',
+          data: meta.elementData || null,
+          color: meta.color || undefined,
+          meta,
+          projectId,
+        });
+        node.projectId = projectId;
+        node.manualPosition = Boolean(position);
+        elementNodes.push(node);
+        nodesById.set(node.id, node);
+      });
+    layoutNodes();
+
+    const processedLinks = new Set();
+    edges.forEach((edge) => {
+      if ((edge.props?.context || '').toLowerCase() !== 'elements') {
+        return;
+      }
+      const fromNode = nodesById.get(edge.from);
+      const toNode = nodesById.get(edge.to);
+      if (!fromNode || !toNode) {
+        return;
+      }
+      const linkId = linkManager.getLinkId(fromNode, toNode);
+      if (processedLinks.has(linkId)) {
+        const existing = linkManager.links.get(linkId);
+        if (existing) {
+          existing.notes = edge.props?.notes || existing.notes || '';
+          existing.projectId = projectId;
+        }
+        return;
+      }
+      processedLinks.add(linkId);
+      linkManager.createLink(fromNode, toNode, linkId);
+      const link = linkManager.links.get(linkId);
+      if (link) {
+        link.notes = edge.props?.notes || '';
+        link.projectId = projectId;
+      }
+    });
+  } catch (error) {
+    console.error('Failed to load element graph', error);
+    showStatusMessage('Failed to load project data', 'error');
+  } finally {
+    linkManager.setEventSuppression(false);
+  }
+
   util.log('Elements builder initialised.');
 
   window.builder = {
@@ -303,12 +601,13 @@ const init = () => {
     elementNodes,
     createElementNode,
     layoutNodes,
+    autosave,
   };
 };
 
-function bootstrap() {
-  applyProjectInfo();
-  init();
+async function bootstrap() {
+  const projectId = applyProjectInfo();
+  await init(projectId);
 }
 
 document.addEventListener('DOMContentLoaded', bootstrap);

@@ -18,6 +18,12 @@ class ProjectNode extends NodeBase {
       x: Math.max(120, horizontal),
       y: Math.max(100, vertical),
     };
+    if (!this.meta || typeof this.meta !== 'object') {
+      this.meta = {};
+    }
+    this.meta.builder = 'project';
+    this.meta.childOrbit = this.childOrbit;
+    this.meta.pyramidSpacing = { ...this.pyramidSpacing };
   }
 
   addChild(nodeOrConfig = {}) {
@@ -72,6 +78,17 @@ class ProjectNode extends NodeBase {
       remaining -= countInRow;
       rowSize += 1;
     }
+  }
+
+  toPersistence() {
+    const base = super.toPersistence();
+    base.meta = {
+      ...base.meta,
+      builder: 'project',
+      childOrbit: this.childOrbit,
+      pyramidSpacing: { ...this.pyramidSpacing },
+    };
+    return base;
   }
 
   onAddChild() {
