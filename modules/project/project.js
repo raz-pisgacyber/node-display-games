@@ -1,8 +1,30 @@
 import ProjectNode from './ProjectNode.js';
 import util, { enableZoomPan, ensureCanvas, log } from '../../core/util.js';
+import AutosaveManager from '../common/autosaveManager.js';
+import { fetchGraph, createNode, createEdge, createCheckpoint } from '../common/api.js';
 
 const PROJECT_STORAGE_KEY = 'story-graph-project';
 const PROJECT_CONTEXT_STORAGE_KEY = 'story-graph-project-context';
+
+const STATUS_LABELS = {
+  idle: 'Idle',
+  dirty: 'Editing…',
+  saving: 'Saving…',
+  saved: 'Saved',
+  error: 'Autosave failed',
+};
+
+const state = {
+  projectId: null,
+  autosave: null,
+  statusDot: null,
+  statusLabel: null,
+  statusOverrideTimer: null,
+  currentStatus: 'idle',
+  listenersAttached: false,
+  lifecycleAttached: false,
+  navigationGuardAttached: false,
+};
 
 function parseProjectContext(raw) {
   if (!raw) return null;
@@ -78,7 +100,111 @@ function applyProjectInfo() {
   return projectId;
 }
 
-const init = () => {
+function updateStatusIndicator(status) {
+  if (!state.statusDot || !state.statusLabel) {
+    return;
+  }
+  const classList = ['status-dot'];
+  if (status === 'saving') {
+    classList.push('saving');
+  } else if (status === 'saved') {
+    classList.push('saved');
+  } else if (status === 'error') {
+    classList.push('error');
+  }
+  state.statusDot.className = classList.join(' ');
+  state.statusLabel.textContent = STATUS_LABELS[status] || STATUS_LABELS.idle;
+}
+
+function handleStatusChange(status) {
+  state.currentStatus = status;
+  if (state.statusOverrideTimer) {
+    return;
+  }
+  updateStatusIndicator(status);
+}
+
+function showStatusMessage(message, type = 'saved') {
+  if (!state.statusDot || !state.statusLabel) {
+    return;
+  }
+  if (state.statusOverrideTimer) {
+    window.clearTimeout(state.statusOverrideTimer);
+    state.statusOverrideTimer = null;
+  }
+  const classList = ['status-dot'];
+  if (type === 'error') {
+    classList.push('error');
+  } else if (type === 'saved') {
+    classList.push('saved');
+  }
+  state.statusDot.className = classList.join(' ');
+  state.statusLabel.textContent = message;
+  state.statusOverrideTimer = window.setTimeout(() => {
+    state.statusOverrideTimer = null;
+    updateStatusIndicator(state.currentStatus);
+  }, 2400);
+}
+
+function handleNodeMutated(event) {
+  const detail = event?.detail || {};
+  const { node, reason } = detail;
+  if (!node) {
+    return;
+  }
+  if (state.projectId && node.projectId && node.projectId !== state.projectId) {
+    return;
+  }
+  if (!node.projectId) {
+    node.projectId = state.projectId;
+  }
+  state.autosave?.markNodeDirty(node, reason);
+}
+
+function attachNavigationGuard() {
+  if (state.navigationGuardAttached) {
+    return;
+  }
+  const backLink = document.querySelector('.toolbar-back');
+  if (!backLink) {
+    return;
+  }
+  backLink.addEventListener('click', (event) => {
+    if (!state.autosave?.hasPending()) {
+      return;
+    }
+    event.preventDefault();
+    const target = backLink.href;
+    state.autosave
+      ?.flush()
+      .catch((error) => {
+        console.warn('Failed to flush autosave before navigation', error);
+      })
+      .finally(() => {
+        window.location.href = target;
+      });
+  });
+  state.navigationGuardAttached = true;
+}
+
+function attachLifecycleHooks() {
+  if (state.lifecycleAttached) {
+    return;
+  }
+  window.addEventListener('beforeunload', () => {
+    if (state.autosave?.hasPending()) {
+      state.autosave.flush({ keepalive: true });
+    }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      state.autosave?.flush({ keepalive: true });
+    }
+  });
+  state.lifecycleAttached = true;
+}
+
+const init = async (projectId) => {
   const workspace = document.getElementById('workspace');
   if (!workspace) {
     log('Workspace element missing.');
@@ -87,10 +213,240 @@ const init = () => {
 
   const canvas = ensureCanvas(workspace, { width: 2400, height: 2400 });
 
+  state.projectId = projectId || null;
+  state.statusDot = document.querySelector('[data-status-dot]');
+  state.statusLabel = document.querySelector('[data-status-label]');
+  state.currentStatus = 'idle';
+  state.statusOverrideTimer = null;
+  updateStatusIndicator('idle');
+
   const canvasCenterX = canvas.offsetWidth / 2;
   const canvasCenterY = Math.max(220, canvas.offsetHeight * 0.24);
 
-  const rootNode = new ProjectNode({ canvas, x: canvasCenterX, y: canvasCenterY });
+  const autosave = new AutosaveManager({
+    projectId,
+    onStatusChange: handleStatusChange,
+  });
+  state.autosave = autosave;
+
+  if (!state.listenersAttached) {
+    document.addEventListener('builder:node-mutated', handleNodeMutated);
+    state.listenersAttached = true;
+  }
+  attachNavigationGuard();
+  attachLifecycleHooks();
+
+  const checkpointButton = document.querySelector('[data-action="save-checkpoint"]');
+  if (checkpointButton) {
+    checkpointButton.addEventListener('click', async () => {
+      if (!state.projectId) {
+        return;
+      }
+      checkpointButton.disabled = true;
+      try {
+        await state.autosave?.flush();
+        await createCheckpoint(state.projectId);
+        showStatusMessage('Checkpoint saved', 'saved');
+      } catch (error) {
+        console.error('Failed to save checkpoint', error);
+        showStatusMessage('Checkpoint failed', 'error');
+      } finally {
+        checkpointButton.disabled = false;
+      }
+    });
+  }
+
+  const nodesById = new Map();
+  const attachedChildIds = new Set();
+
+  const instantiateNode = (nodeData) => {
+    const meta = nodeData.meta || {};
+    const position = meta.position || { x: canvasCenterX, y: canvasCenterY };
+    const node = new ProjectNode({
+      canvas,
+      id: nodeData.id,
+      title: nodeData.label || meta.title || nodeData.id,
+      x: position.x,
+      y: position.y,
+      notes: meta.notes || '',
+      discussion: meta.discussion || '',
+      fullText: meta.fullText ?? nodeData.content ?? '',
+      meta,
+      projectId,
+    });
+    node.projectId = projectId;
+    node.manualPosition = Boolean(meta.position);
+    nodesById.set(node.id, node);
+    node.onAddChild = () => handleAddChild(node);
+    return node;
+  };
+
+  const attachChild = (parent, child, { expand = false } = {}) => {
+    if (!parent || !child) {
+      return;
+    }
+    child.parent = parent;
+    if (!parent.children.includes(child)) {
+      parent.children.push(child);
+    }
+    parent.onChildrenChanged?.();
+    if (expand) {
+      if (!parent.expanded) {
+        parent.expandChildren();
+      } else if (!child.manualPosition) {
+        parent.layoutChildren();
+      }
+      child.show();
+    } else {
+      if (parent.expanded && !child.manualPosition) {
+        parent.layoutChildren();
+      }
+      if (!parent.expanded) {
+        child.hide();
+      } else {
+        child.show();
+      }
+    }
+  };
+
+  const handleAddChild = async (parent) => {
+    const label = window.prompt('Name the new story beat or chapter');
+    if (!label) {
+      return null;
+    }
+    const defaultPosition = {
+      x: parent.position.x + (parent.childOrbit || 220) * 0.6,
+      y: parent.position.y + (parent.childOrbit || 220) * 0.8,
+    };
+    const meta = {
+      builder: 'project',
+      position: defaultPosition,
+      notes: '',
+      discussion: '',
+      fullText: '',
+      childOrbit: Math.max(160, (parent.childOrbit ?? 220) * 0.78),
+      pyramidSpacing: { ...parent.pyramidSpacing },
+    };
+    try {
+      const created = await createNode({ label, content: '', meta }, { projectId });
+      const createdMeta = created?.meta || meta;
+      const position = createdMeta.position || defaultPosition;
+      const child = new ProjectNode({
+        canvas,
+        id: created?.id,
+        title: created?.label || label,
+        x: position.x,
+        y: position.y,
+        notes: createdMeta.notes || '',
+        discussion: createdMeta.discussion || '',
+        fullText: created?.content || '',
+        meta: createdMeta,
+        projectId,
+      });
+      child.projectId = projectId;
+      child.manualPosition = false;
+      nodesById.set(child.id, child);
+      child.onAddChild = () => handleAddChild(child);
+      attachChild(parent, child, { expand: true });
+      attachedChildIds.add(child.id);
+      try {
+        await createEdge(
+          {
+            from: parent.id,
+            to: child.id,
+            type: 'CHILD_OF',
+            props: { context: 'project' },
+          },
+          { projectId }
+        );
+      } catch (edgeError) {
+        console.error('Failed to link child node', edgeError);
+        showStatusMessage('Child created but link failed', 'error');
+      }
+      return child;
+    } catch (error) {
+      console.error('Failed to create project child node', error);
+      showStatusMessage('Failed to add child node', 'error');
+      return null;
+    }
+  };
+
+  const builderNodes = [];
+  try {
+    const graph = await fetchGraph(projectId);
+    const nodes = graph?.nodes || [];
+    const edges = graph?.edges || [];
+    nodes
+      .filter((node) => (node.meta?.builder || '').toLowerCase() === 'project')
+      .forEach((nodeData) => {
+        builderNodes.push(nodeData);
+      });
+
+    if (!builderNodes.length) {
+      const payload = {
+        label: 'Project',
+        content: '',
+        meta: {
+          builder: 'project',
+          position: { x: canvasCenterX, y: canvasCenterY },
+          notes: '',
+          discussion: '',
+          fullText: '',
+        },
+      };
+      try {
+        const created = await createNode(payload, { projectId });
+        if (created) {
+          builderNodes.push(created);
+        }
+      } catch (creationError) {
+        console.error('Failed to seed project root node', creationError);
+        showStatusMessage('Failed to initialise project node', 'error');
+      }
+    }
+
+    builderNodes.forEach((nodeData) => instantiateNode(nodeData));
+
+    edges
+      .filter(
+        (edge) =>
+          (edge.props?.context || '').toLowerCase() === 'project' &&
+          (edge.type || '').toUpperCase() === 'CHILD_OF'
+      )
+      .forEach((edge) => {
+        const parent = nodesById.get(edge.from);
+        const child = nodesById.get(edge.to);
+        if (!parent || !child) {
+          return;
+        }
+        attachChild(parent, child, { expand: false });
+        attachedChildIds.add(child.id);
+      });
+  } catch (error) {
+    console.error('Failed to load project graph', error);
+    showStatusMessage('Failed to load project data', 'error');
+  }
+
+  const rootNodes = [];
+  nodesById.forEach((node, id) => {
+    if (!attachedChildIds.has(id)) {
+      rootNodes.push(node);
+    }
+  });
+
+  let rootNode = rootNodes[0] || nodesById.values().next().value || null;
+  if (!rootNode) {
+    rootNode = new ProjectNode({ canvas, x: canvasCenterX, y: canvasCenterY, projectId });
+    rootNode.projectId = projectId;
+    nodesById.set(rootNode.id, rootNode);
+    rootNodes.push(rootNode);
+    rootNode.onAddChild = () => handleAddChild(rootNode);
+  }
+
+  rootNodes.forEach((node) => {
+    node.show();
+    node.onAddChild = () => handleAddChild(node);
+  });
 
   const viewport = enableZoomPan(workspace, canvas, {
     minScale: 0.5,
@@ -99,13 +455,15 @@ const init = () => {
   });
 
   requestAnimationFrame(() => {
-    viewport.focusOn(
-      { x: rootNode.position.x, y: rootNode.position.y },
-      {
-        scale: 0.82,
-        offset: { x: 0, y: -Math.max(140, workspace.clientHeight * 0.18) },
-      }
-    );
+    if (rootNode) {
+      viewport.focusOn(
+        { x: rootNode.position.x, y: rootNode.position.y },
+        {
+          scale: 0.82,
+          offset: { x: 0, y: -Math.max(140, workspace.clientHeight * 0.18) },
+        }
+      );
+    }
   });
 
   log('Project builder initialised.');
@@ -114,12 +472,14 @@ const init = () => {
     util,
     rootNode,
     viewport,
+    autosave,
+    nodesById,
   };
 };
 
-function bootstrap() {
-  applyProjectInfo();
-  init();
+async function bootstrap() {
+  const projectId = applyProjectInfo();
+  await init(projectId);
 }
 
 document.addEventListener('DOMContentLoaded', bootstrap);

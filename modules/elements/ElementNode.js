@@ -43,6 +43,12 @@ class ElementNode extends NodeBase {
     this.links = new Set();
     const initialData = ElementNode.cloneData(options.data);
     this.data = this.ensureDataShape(initialData);
+    if (!this.meta || typeof this.meta !== 'object') {
+      this.meta = {};
+    }
+    this.meta.builder = 'elements';
+    this.meta.elementType = this.type;
+    this.meta.elementData = ElementNode.cloneData(this.data);
   }
 
   getIconDefinitions() {
@@ -67,6 +73,30 @@ class ElementNode extends NodeBase {
       return `${this.title} — ${TYPE_CONFIG[this.type].label} Data`;
     }
     return super.getCardTitle(type);
+  }
+
+  recordDataChange(reason = 'data') {
+    if (!this.meta || typeof this.meta !== 'object') {
+      this.meta = {};
+    }
+    this.meta.builder = 'elements';
+    this.meta.elementType = this.type;
+    this.meta.elementData = ElementNode.cloneData(this.data);
+    this.meta.notes = this.notes || '';
+    this.meta.discussion = this.discussion || '';
+    this.meta.fullText = this.fullText || '';
+    this.notifyMutation(reason, { data: this.meta.elementData });
+  }
+
+  toPersistence() {
+    const base = super.toPersistence();
+    base.meta = {
+      ...base.meta,
+      builder: 'elements',
+      elementType: this.type,
+      elementData: ElementNode.cloneData(this.data),
+    };
+    return base;
   }
 
   static normaliseType(type) {
@@ -244,6 +274,7 @@ class ElementNode extends NodeBase {
       this.setTitle(event.target.value);
       this.data.title = this.title;
       headerTitleEl.textContent = `${this.title} — ${TYPE_CONFIG[this.type].label} Data`;
+      this.recordDataChange('title');
     });
 
     container.appendChild(titleLabel);
@@ -280,6 +311,7 @@ class ElementNode extends NodeBase {
     inputEl.placeholder = placeholder;
     inputEl.addEventListener('input', (event) => {
       onInput?.(event.target.value);
+      this.recordDataChange('data');
     });
     container.appendChild(fieldLabel);
     container.appendChild(inputEl);
@@ -439,6 +471,7 @@ class ElementNode extends NodeBase {
     addButton.addEventListener('click', () => {
       this.data.customFields.push({ key: '', value: '' });
       this.renderCustomFields(fieldsWrapper);
+      this.recordDataChange('data');
     });
     section.appendChild(addButton);
 
@@ -458,6 +491,7 @@ class ElementNode extends NodeBase {
       keyInput.value = field.key;
       keyInput.addEventListener('input', (event) => {
         field.key = event.target.value;
+        this.recordDataChange('data');
       });
 
       const valueInput = document.createElement('textarea');
@@ -466,6 +500,7 @@ class ElementNode extends NodeBase {
       valueInput.value = field.value;
       valueInput.addEventListener('input', (event) => {
         field.value = event.target.value;
+        this.recordDataChange('data');
       });
 
       const remove = document.createElement('button');
@@ -476,6 +511,7 @@ class ElementNode extends NodeBase {
       remove.addEventListener('click', () => {
         this.data.customFields.splice(index, 1);
         this.renderCustomFields(wrapper);
+        this.recordDataChange('data');
       });
 
       row.appendChild(keyInput);

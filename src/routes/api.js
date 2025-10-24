@@ -30,6 +30,19 @@ function sanitiseMeta(meta) {
   return serialiseMeta(normaliseMeta(meta));
 }
 
+function generateCheckpointName(date = new Date()) {
+  const fallback = new Date();
+  const source = date instanceof Date && !Number.isNaN(date.getTime()) ? date : fallback;
+  const pad = (value) => value.toString().padStart(2, '0');
+  const year = source.getUTCFullYear();
+  const month = pad(source.getUTCMonth() + 1);
+  const day = pad(source.getUTCDate());
+  const hours = pad(source.getUTCHours());
+  const minutes = pad(source.getUTCMinutes());
+  const seconds = pad(source.getUTCSeconds());
+  return `Checkpoint ${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
+}
+
 function parseLimitParam(value, defaultValue, maxValue) {
   const rawFallback = Number.isInteger(defaultValue)
     ? defaultValue
@@ -345,7 +358,7 @@ router.post('/edge', async (req, res, next) => {
          CREATE (a)-[r:${relationshipType}]->(b)
          SET r += $props
          RETURN {from: a.id, to: b.id, type: type(r), props: properties(r), project_id: $projectId} AS edge`,
-        { from, to, props, projectId }
+        { from, to, props: ensureObject(props), projectId }
       )
     );
     if (result.records.length === 0) {
@@ -386,6 +399,41 @@ router.delete('/edge', async (req, res, next) => {
       return;
     }
     res.status(204).end();
+  } catch (error) {
+    next(error);
+  } finally {
+    await session.close();
+  }
+});
+
+router.patch('/edge', async (req, res, next) => {
+  const body = ensureObject(req.body);
+  const { from, to } = body;
+  if (!from || !to) {
+    res.status(400).json({ error: 'from and to are required' });
+    return;
+  }
+  const relationshipType = validateRelationshipType(body.type);
+  const projectId = (body.project_id || config.defaults.projectId).toString();
+  const props = ensureObject(body.props);
+  const session = getWriteSession();
+  try {
+    const result = await session.writeTransaction((tx) =>
+      tx.run(
+        `MATCH (a:ProjectNode {id: $from})-[r:${relationshipType}]->(b:ProjectNode {id: $to})
+         WHERE coalesce(a.project_id, $projectId) = $projectId AND coalesce(b.project_id, $projectId) = $projectId
+         SET a.project_id = coalesce(a.project_id, $projectId)
+         SET b.project_id = coalesce(b.project_id, $projectId)
+         SET r = $props
+         RETURN {from: a.id, to: b.id, type: type(r), props: properties(r), project_id: $projectId} AS edge`,
+        { from, to, projectId, props }
+      )
+    );
+    if (result.records.length === 0) {
+      res.status(404).json({ error: 'Edge not found' });
+      return;
+    }
+    res.json(result.records[0].get('edge'));
   } catch (error) {
     next(error);
   } finally {
@@ -516,12 +564,11 @@ router.get('/summaries', async (req, res, next) => {
 });
 
 router.post('/checkpoints', async (req, res, next) => {
-  const { project_id: projectIdInput = config.defaults.projectId, name } = req.body || {};
-  if (!name) {
-    res.status(400).json({ error: 'name is required' });
-    return;
-  }
-  const projectId = projectIdInput.toString();
+  const body = ensureObject(req.body);
+  const projectId = (body.project_id || config.defaults.projectId).toString();
+  const rawName = typeof body.name === 'string' ? body.name.trim() : '';
+  const generatedName = generateCheckpointName();
+  const checkpointName = (rawName || generatedName).slice(0, 255);
   const session = getWriteSession();
   try {
     const result = await session.run(
@@ -550,9 +597,14 @@ router.post('/checkpoints', async (req, res, next) => {
     const [insertResult] = await executeWithLogging(
       pool,
       `INSERT INTO checkpoints (project_id, name, json_snapshot, checksum) VALUES (?, ?, ?, ?)` ,
-      [projectId, name, json, checksum]
+      [projectId, checkpointName, json, checksum]
     );
-    res.status(201).json({ id: insertResult.insertId, project_id: projectId, name, checksum });
+    res.status(201).json({
+      id: insertResult.insertId,
+      project_id: projectId,
+      name: checkpointName,
+      checksum,
+    });
   } catch (error) {
     next(error);
   } finally {

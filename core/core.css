@@ -9,6 +9,8 @@
   --node-shadow: 0 18px 32px rgba(0, 0, 0, 0.35);
   --transition-fast: 120ms ease;
   --transition-medium: 240ms ease;
+  --success: #2ecc71;
+  --danger: #ff7675;
 }
 
 * {
@@ -130,6 +132,34 @@ body {
   background: rgba(255, 255, 255, 0.16);
   border-color: rgba(255, 255, 255, 0.2);
   transform: translateY(-1px);
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--muted);
+  transition: background var(--transition-fast);
+}
+
+.status-dot.saving {
+  background: var(--accent);
+}
+
+.status-dot.error {
+  background: var(--danger);
+}
+
+.status-dot.saved {
+  background: var(--success);
 }
 
 #workspace {

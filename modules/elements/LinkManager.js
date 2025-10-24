@@ -19,6 +19,7 @@ class LinkManager {
     this.links = new Map();
     this.pendingSource = null;
     this.svg = this.ensureSvgLayer();
+    this.suppressEvents = false;
 
     this.onCanvasPointerDown = this.handleCanvasPointerDown.bind(this);
     this.canvas.addEventListener('pointerdown', this.onCanvasPointerDown);
@@ -134,6 +135,7 @@ class LinkManager {
       handle,
       notes: '',
       card: null,
+      projectId: nodeA.projectId || nodeB.projectId || null,
     };
 
     handle.addEventListener('click', (event) => {
@@ -154,6 +156,7 @@ class LinkManager {
     nodeB.onConnectionsChanged?.();
 
     this.updateLinkPosition(link);
+    this.emitLinkEvent('create', link);
   }
 
   removeLink(id) {
@@ -172,6 +175,7 @@ class LinkManager {
       }
     }
     this.links.delete(id);
+    this.emitLinkEvent('delete', link);
   }
 
   updateLinksForNode(node) {
@@ -264,6 +268,7 @@ class LinkManager {
     notes.value = link.notes;
     notes.addEventListener('input', (event) => {
       link.notes = event.target.value;
+      this.emitLinkEvent('update', link);
     });
 
     const unlinkButton = document.createElement('button');
@@ -284,6 +289,38 @@ class LinkManager {
     host.appendChild(card);
 
     return card;
+  }
+
+  emitLinkEvent(action, link) {
+    if (this.suppressEvents) {
+      return;
+    }
+    if (typeof document === 'undefined' || typeof CustomEvent === 'undefined') {
+      return;
+    }
+    if (!link?.nodeA?.id || !link?.nodeB?.id) {
+      return;
+    }
+    const detail = {
+      action,
+      from: link.nodeA.id,
+      to: link.nodeB.id,
+      type: 'LINKS_TO',
+      props: {
+        context: 'elements',
+        notes: link.notes || '',
+      },
+      projectId: link.projectId || link.nodeA.projectId || link.nodeB.projectId || null,
+    };
+    document.dispatchEvent(
+      new CustomEvent('builder:link-mutated', {
+        detail,
+      })
+    );
+  }
+
+  setEventSuppression(suppressed) {
+    this.suppressEvents = Boolean(suppressed);
   }
 }
 

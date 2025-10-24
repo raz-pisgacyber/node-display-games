@@ -51,9 +51,26 @@ class NodeBase {
     this.manualPosition = false;
     this.id = id || `node-${++nodeIdCounter}`;
     this.draggable = draggable !== false;
-    this.fullText = options?.fullText ?? '';
-    this.notes = options?.notes ?? '';
-    this.discussion = options?.discussion ?? '';
+    this.projectId = options?.projectId || null;
+
+    const metaFromOptions =
+      options?.meta && typeof options.meta === 'object' && !Array.isArray(options.meta)
+        ? { ...options.meta }
+        : {};
+    this.meta = metaFromOptions;
+
+    this.fullText =
+      options?.fullText ?? metaFromOptions.fullText ?? options?.content ?? this.fullText ?? '';
+    this.notes = options?.notes ?? metaFromOptions.notes ?? this.notes ?? '';
+    this.discussion = options?.discussion ?? metaFromOptions.discussion ?? this.discussion ?? '';
+
+    this.meta.notes = this.notes;
+    this.meta.discussion = this.discussion;
+    this.meta.fullText = this.fullText;
+    this.meta.color = this.meta.color || this.color;
+    if (!this.meta.position && typeof x === 'number' && typeof y === 'number') {
+      this.meta.position = { x, y };
+    }
 
     /** ✅ PATCH: Ensure every node has a link set for LinkManager */
     this.links = new Set();
@@ -218,6 +235,10 @@ class NodeBase {
 
   setPosition(x, y, animate = true) {
     this.position = { x, y };
+    if (!this.meta || typeof this.meta !== 'object') {
+      this.meta = {};
+    }
+    this.meta.position = { x, y };
     const style = this.element.style;
     style.left = `${x}px`;
     style.top = `${y}px`;
@@ -307,6 +328,14 @@ class NodeBase {
     } else if (this.parent && this.parent.expanded) {
       this.parent.layoutChildren();
     }
+    if (moved) {
+      if (!this.meta || typeof this.meta !== 'object') {
+        this.meta = {};
+      }
+      this.meta.position = { ...(this.position || { x: 0, y: 0 }) };
+      this.meta.manualPosition = !!this.manualPosition;
+      this.notifyMutation('position');
+    }
   }
 
   onPointerDown(event) {
@@ -351,6 +380,10 @@ class NodeBase {
     if (!session.moved && (Math.abs(dx) > 0 || Math.abs(dy) > 0)) {
       session.moved = true;
       this.manualPosition = true;
+      if (!this.meta || typeof this.meta !== 'object') {
+        this.meta = {};
+      }
+      this.meta.manualPosition = true;
     }
 
     this.setPosition(session.startPosition.x + dx, session.startPosition.y + dy);
@@ -420,6 +453,9 @@ class NodeBase {
     } else {
       child.parent = this;
     }
+    if (!child.projectId && this.projectId) {
+      child.projectId = this.projectId;
+    }
     child.manualPosition = false;
     this.children.push(child);
     if (!this.expanded) {
@@ -440,6 +476,7 @@ class NodeBase {
       x: this.position.x + 80,
       y: this.position.y + 80,
       childOrbit: this.childOrbit * 0.8,
+      projectId: this.projectId,
     };
     return this.addChild({ ...defaults, ...config });
   }
@@ -553,6 +590,11 @@ class NodeBase {
       notesArea.value = this.notes || '';
       notesArea.addEventListener('input', (event) => {
         this.notes = event.target.value;
+        if (!this.meta || typeof this.meta !== 'object') {
+          this.meta = {};
+        }
+        this.meta.notes = this.notes;
+        this.notifyMutation('notes');
       });
 
       content.appendChild(nameLabel);
@@ -565,6 +607,11 @@ class NodeBase {
       discussionArea.value = this.discussion || '';
       discussionArea.addEventListener('input', (event) => {
         this.discussion = event.target.value;
+        if (!this.meta || typeof this.meta !== 'object') {
+          this.meta = {};
+        }
+        this.meta.discussion = this.discussion;
+        this.notifyMutation('discussion');
       });
       content.appendChild(discussionArea);
     } else if (type === 'text') {
@@ -580,6 +627,11 @@ class NodeBase {
       textArea.rows = 12;
       textArea.addEventListener('input', (event) => {
         this.fullText = event.target.value;
+        if (!this.meta || typeof this.meta !== 'object') {
+          this.meta = {};
+        }
+        this.meta.fullText = this.fullText;
+        this.notifyMutation('fullText');
       });
       content.appendChild(textArea);
     }
@@ -650,13 +702,19 @@ class NodeBase {
   }
 
   setTitle(newTitle) {
-    this.title = newTitle || 'Untitled';
+    const trimmed = typeof newTitle === 'string' ? newTitle.trim() : '';
+    this.title = trimmed || 'Untitled';
     const titleEl = this.element.querySelector('.node-title');
     if (titleEl) {
       titleEl.textContent = this.title;
     }
     this.refreshCardHeaders();
     NodeBase.activeLinkManager?.updateLinkTitlesForNode?.(this);
+    if (!this.meta || typeof this.meta !== 'object') {
+      this.meta = {};
+    }
+    this.meta.title = this.title;
+    this.notifyMutation('title');
   }
 
   getCardTitle(type) {
@@ -680,6 +738,40 @@ class NodeBase {
         heading.textContent = this.getCardTitle(type);
       }
     });
+  }
+
+  notifyMutation(reason, detail = {}) {
+    if (typeof document === 'undefined' || typeof CustomEvent === 'undefined') {
+      return;
+    }
+    const eventDetail = {
+      node: this,
+      reason,
+      detail,
+    };
+    document.dispatchEvent(
+      new CustomEvent('builder:node-mutated', {
+        detail: eventDetail,
+      })
+    );
+  }
+
+  toPersistence() {
+    const position = this.position || this.meta?.position || { x: 0, y: 0 };
+    const meta = {
+      ...(this.meta || {}),
+      notes: this.notes || '',
+      discussion: this.discussion || '',
+      fullText: this.fullText || '',
+      position: { x: position.x || 0, y: position.y || 0 },
+      color: this.color,
+    };
+    return {
+      id: this.id,
+      label: this.title || 'Untitled',
+      content: this.fullText || '',
+      meta,
+    };
   }
 
   static hideOpenCard() {
