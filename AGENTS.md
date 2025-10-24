@@ -48,3 +48,7 @@ Implemented two-way linking between Project and Elements builders.
 Added /api/link, /api/links, and /api/link deletion endpoints.
 Integrated link listing and management into both data cards using existing UI patterns.
 Maintained full design consistency and autosave integration.
+
+## [2025-10-28 09:15:00] - codex
+Resolved Neo4j write access errors by ensuring the `/api/links` fetch runs through a write-mode session when backfilling `project_id` fields.
+Confirmed link creation and retrieval routes now operate without triggering read-only transaction failures.

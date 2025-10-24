@@ -449,7 +449,9 @@ router.get('/links', async (req, res, next) => {
   }
   const relationshipType = validateRelationshipType(req.query?.type);
   const projectId = (req.query?.project_id || config.defaults.projectId).toString();
-  const session = getReadSession();
+  // This query normalises `project_id` on nodes as part of the read, so it
+  // needs write access despite serving a GET route.
+  const session = getWriteSession();
   try {
     const result = await session.run(
       `MATCH (n:ProjectNode {id: $nodeId})

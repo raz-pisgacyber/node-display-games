@@ -97,3 +97,10 @@
   - Extended project data cards with a Linked Elements section that lists, adds, and removes element relationships using existing card styling and live refreshes.
   - Mirrored the functionality in elements data cards so linked project nodes can be reviewed and maintained from the elements builder with matching controls.
 - Follow-ups: Consider refreshing available element/project indexes when new nodes are created after initial load so selectors stay in sync without a full reload.
+
+## 2025-10-28
+- Files modified: `src/routes/api.js`, `AGENTS.md`.
+- Completed tasks:
+  - Switched the `/api/links` fetch endpoint to use a write-capable Neo4j session so its backfilling `SET` clauses no longer trigger "write in read mode" errors.
+  - Documented the resolved issue in `AGENTS.md` Agent History for future maintainers.
+- Verification: Neo4j link creation and retrieval now proceed without read-only transaction failures.
