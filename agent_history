@@ -191,3 +191,10 @@
   - Introduced a shared project-structure builder that assembles full project and element graphs from Neo4j payloads and wired the main hub to emit unified `project_graph`/`elements_graph` snapshots.
   - Updated project and element builders to send scoped updates that augment the shared structure instead of replacing it, preventing node navigation from dropping unrelated graph data.
 - Verification: Not run (no automated test suite available).
+## 2025-11-09 12:00 UTC
+- Files modified: `docs/neo4j-working-memory-report.md`, `agent_history`.
+- Completed tasks:
+  - Audited Neo4j graph routes, builder loaders, and working-memory helpers to map how project and element data flow from the database into browser-managed state.
+  - Documented the schema, current reconstruction logic, and the causes of partial `project_structure` payloads across the Project and Elements builders.
+  - Proposed a unified loading strategy, refresh triggers, and consistency safeguards so working memory always carries both hierarchical and relational graphs.
+- Verification: Not run (documentation-only change).
