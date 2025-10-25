@@ -103,7 +103,7 @@ function buildDefaultMemory(currentSettings = settings) {
       active_node_id: '',
       timestamp,
     },
-    project_structure: {},
+    project_structure: sanitiseStructure({}),
     node_context: {},
     fetched_context: {},
     working_history: '',
@@ -297,23 +297,60 @@ function sanitiseMeta(meta = {}, fallback = {}) {
   return result;
 }
 
-function sanitiseStructureNode(node) {
-  if (!node) {
+function sanitiseGraphNode(node) {
+  if (!node || typeof node !== 'object') {
     return null;
   }
   const id = safeString(node.id);
   if (!id) {
     return null;
   }
-  return {
+  const builder = safeString(node.builder || node.type || '');
+  const payload = {
     id,
     label: safeString(node.label ?? node.title ?? ''),
-    type: safeString(node.type ?? node.builder ?? ''),
+    type: safeString(node.type ?? ''),
+    builder,
   };
+  const children = Array.isArray(node.children)
+    ? Array.from(
+        new Set(
+          node.children
+            .map((child) => safeString(child))
+            .filter((value) => Boolean(value))
+        )
+      )
+    : [];
+  if (builder.toLowerCase() === 'project') {
+    payload.children = children;
+  } else if (children.length) {
+    payload.children = children;
+  }
+  const links = Array.isArray(node.links)
+    ? node.links
+        .map((link) => {
+          if (!link || typeof link !== 'object') {
+            return null;
+          }
+          const to = safeString(link.to);
+          if (!to) {
+            return null;
+          }
+          return {
+            to,
+            type: safeString(link.type || 'LINKS_TO'),
+          };
+        })
+        .filter(Boolean)
+    : [];
+  if (links.length) {
+    payload.links = links;
+  }
+  return payload;
 }
 
-function sanitiseStructureEdge(edge) {
-  if (!edge) {
+function sanitiseGraphEdge(edge) {
+  if (!edge || typeof edge !== 'object') {
     return null;
   }
   const from = safeString(edge.from);
@@ -328,17 +365,37 @@ function sanitiseStructureEdge(edge) {
   };
 }
 
-function sanitiseStructure(structure) {
-  if (!structure || typeof structure !== 'object') {
+function sanitiseGraph(graph) {
+  if (!graph || typeof graph !== 'object') {
     return { nodes: [], edges: [] };
   }
-  const nodes = Array.isArray(structure.nodes)
-    ? structure.nodes.map(sanitiseStructureNode).filter(Boolean)
+  const nodes = Array.isArray(graph.nodes)
+    ? graph.nodes.map(sanitiseGraphNode).filter(Boolean)
     : [];
-  const edges = Array.isArray(structure.edges)
-    ? structure.edges.map(sanitiseStructureEdge).filter(Boolean)
+  const edges = Array.isArray(graph.edges)
+    ? graph.edges.map(sanitiseGraphEdge).filter(Boolean)
     : [];
   return { nodes, edges };
+}
+
+function sanitiseStructure(structure) {
+  if (!structure || typeof structure !== 'object') {
+    return {
+      project_graph: { nodes: [], edges: [] },
+      elements_graph: { nodes: [], edges: [] },
+    };
+  }
+  if (structure.project_graph || structure.elements_graph) {
+    return {
+      project_graph: sanitiseGraph(structure.project_graph),
+      elements_graph: sanitiseGraph(structure.elements_graph),
+    };
+  }
+  const fallback = sanitiseGraph(structure);
+  return {
+    project_graph: fallback,
+    elements_graph: { nodes: [], edges: [] },
+  };
 }
 
 function sanitiseNodeContext(context) {
@@ -413,7 +470,7 @@ function applySettingsToMemory() {
   const target = ensureMemory();
   target.config = { ...settings };
   if (!settings.include_project_structure) {
-    target.project_structure = {};
+    target.project_structure = sanitiseStructure({});
   }
   if (!settings.include_context) {
     target.node_context = {};
@@ -429,18 +486,89 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
   const scoped = cloneJson(snapshot);
   const targetId = nodeId ? safeString(nodeId) : scoped.session?.active_node_id || '';
   if (!targetId) {
-    scoped.project_structure = { nodes: [], edges: [] };
+    scoped.project_structure = sanitiseStructure({});
     scoped.node_context = {};
     scoped.messages = [];
     scoped.last_user_message = '';
     return scoped;
   }
-  const structure = snapshot.project_structure || {};
-  const nodes = Array.isArray(structure.nodes) ? structure.nodes.filter((node) => node.id === targetId) : [];
-  const edges = Array.isArray(structure.edges)
-    ? structure.edges.filter((edge) => edge.from === targetId || edge.to === targetId)
+  const structure = sanitiseStructure(snapshot.project_structure || {});
+  const projectNodes = Array.isArray(structure.project_graph?.nodes)
+    ? structure.project_graph.nodes
     : [];
-  scoped.project_structure = { nodes, edges };
+  const projectEdges = Array.isArray(structure.project_graph?.edges)
+    ? structure.project_graph.edges
+    : [];
+  const elementNodes = Array.isArray(structure.elements_graph?.nodes)
+    ? structure.elements_graph.nodes
+    : [];
+  const elementEdges = Array.isArray(structure.elements_graph?.edges)
+    ? structure.elements_graph.edges
+    : [];
+
+  const projectNodeIds = new Set();
+  const elementNodeIds = new Set();
+
+  const hasProjectNode = projectNodes.some((node) => node.id === targetId);
+  const hasElementNode = elementNodes.some((node) => node.id === targetId);
+  if (hasProjectNode) {
+    projectNodeIds.add(targetId);
+    projectEdges.forEach((edge) => {
+      if (edge.from === targetId) {
+        projectNodeIds.add(edge.to);
+      }
+      if (edge.to === targetId) {
+        projectNodeIds.add(edge.from);
+      }
+    });
+  }
+  if (hasElementNode) {
+    elementNodeIds.add(targetId);
+    elementEdges.forEach((edge) => {
+      if (edge.from === targetId) {
+        elementNodeIds.add(edge.to);
+      }
+      if (edge.to === targetId) {
+        elementNodeIds.add(edge.from);
+      }
+    });
+  }
+
+  elementEdges.forEach((edge) => {
+    if (edge.from === targetId && edge.to) {
+      elementNodeIds.add(edge.to);
+    }
+    if (edge.to === targetId && edge.from) {
+      elementNodeIds.add(edge.from);
+    }
+  });
+
+  const scopedProjectNodes = hasProjectNode
+    ? projectNodes.filter((node) => projectNodeIds.has(node.id))
+    : [];
+  const scopedProjectEdges = hasProjectNode
+    ? projectEdges.filter(
+        (edge) => projectNodeIds.has(edge.from) || projectNodeIds.has(edge.to)
+      )
+    : [];
+
+  const scopedElementNodes = (hasElementNode || hasProjectNode)
+    ? elementNodes.filter((node) => elementNodeIds.has(node.id))
+    : [];
+  const scopedElementEdges = (hasElementNode || hasProjectNode)
+    ? elementEdges.filter(
+        (edge) =>
+          elementNodeIds.has(edge.from) ||
+          elementNodeIds.has(edge.to) ||
+          projectNodeIds.has(edge.from) ||
+          projectNodeIds.has(edge.to)
+      )
+    : [];
+
+  scoped.project_structure = sanitiseStructure({
+    project_graph: { nodes: scopedProjectNodes, edges: scopedProjectEdges },
+    elements_graph: { nodes: scopedElementNodes, edges: scopedElementEdges },
+  });
   if (snapshot.node_context?.id === targetId) {
     scoped.node_context = cloneJson(snapshot.node_context);
   } else {
@@ -562,7 +690,7 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
   }
   if (!settings.include_project_structure) {
     if (Object.keys(target.project_structure || {}).length) {
-      target.project_structure = {};
+      target.project_structure = sanitiseStructure({});
       commitMemory();
     }
     return getWorkingMemorySnapshot();

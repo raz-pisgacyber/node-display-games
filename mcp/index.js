@@ -195,7 +195,7 @@ function sanitiseLinkedElements(list = []) {
     .filter(Boolean);
 }
 
-function sanitiseStructureNode(node) {
+function sanitiseGraphNode(node) {
   if (!node || typeof node !== 'object') {
     return null;
   }
@@ -205,16 +205,55 @@ function sanitiseStructureNode(node) {
   }
   const label =
     typeof node.label === 'string' ? node.label : node.title?.toString?.() || '';
-  const type =
-    typeof node.type === 'string'
-      ? node.type
-      : typeof node.builder === 'string'
-      ? node.builder
-      : '';
-  return { id, label, type };
+  const type = typeof node.type === 'string' ? node.type : '';
+  const builder =
+    typeof node.builder === 'string' ? node.builder : type || '';
+  const normalisedChildren = Array.isArray(node.children)
+    ? Array.from(
+        new Set(
+          node.children
+            .map((child) =>
+              typeof child === 'string' ? child : child?.toString?.()
+            )
+            .filter(Boolean)
+        )
+      )
+    : [];
+  const links = Array.isArray(node.links)
+    ? node.links
+        .map((link) => {
+          if (!link || typeof link !== 'object') {
+            return null;
+          }
+          const target =
+            typeof link.to === 'string' ? link.to : link.to?.toString?.();
+          if (!target) {
+            return null;
+          }
+          const linkType =
+            typeof link.type === 'string' ? link.type : 'LINKS_TO';
+          return { to: target, type: linkType };
+        })
+        .filter(Boolean)
+    : [];
+  const payload = {
+    id,
+    label,
+    type,
+    builder,
+  };
+  if (builder.trim().toLowerCase() === 'project') {
+    payload.children = normalisedChildren;
+  } else if (normalisedChildren.length) {
+    payload.children = normalisedChildren;
+  }
+  if (links.length) {
+    payload.links = links;
+  }
+  return payload;
 }
 
-function sanitiseStructureEdge(edge) {
+function sanitiseGraphEdge(edge) {
   if (!edge || typeof edge !== 'object') {
     return null;
   }
@@ -224,24 +263,279 @@ function sanitiseStructureEdge(edge) {
   if (!from || !to) {
     return null;
   }
-  return {
-    from,
-    to,
-    type: typeof edge.type === 'string' ? edge.type : 'LINKS_TO',
-  };
+  const type = typeof edge.type === 'string' ? edge.type : 'LINKS_TO';
+  return { from, to, type };
+}
+
+function sanitiseGraph(graph) {
+  if (!graph || typeof graph !== 'object') {
+    return { nodes: [], edges: [] };
+  }
+  const nodes = Array.isArray(graph.nodes)
+    ? graph.nodes.map(sanitiseGraphNode).filter(Boolean)
+    : [];
+  const edges = Array.isArray(graph.edges)
+    ? graph.edges.map(sanitiseGraphEdge).filter(Boolean)
+    : [];
+  return { nodes, edges };
 }
 
 function sanitiseStructure(structure) {
   if (!structure || typeof structure !== 'object') {
-    return { nodes: [], edges: [] };
+    return {
+      project_graph: { nodes: [], edges: [] },
+      elements_graph: { nodes: [], edges: [] },
+    };
   }
-  const nodes = Array.isArray(structure.nodes)
-    ? structure.nodes.map(sanitiseStructureNode).filter(Boolean)
-    : [];
-  const edges = Array.isArray(structure.edges)
-    ? structure.edges.map(sanitiseStructureEdge).filter(Boolean)
-    : [];
-  return { nodes, edges };
+  if (structure.project_graph || structure.elements_graph) {
+    return {
+      project_graph: sanitiseGraph(structure.project_graph),
+      elements_graph: sanitiseGraph(structure.elements_graph),
+    };
+  }
+  const fallbackGraph = sanitiseGraph(structure);
+  return {
+    project_graph: fallbackGraph,
+    elements_graph: { nodes: [], edges: [] },
+  };
+}
+
+function normaliseId(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value.toString === 'function') {
+    return value.toString();
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    return '';
+  }
+}
+
+function pickFirstString(...candidates) {
+  for (let index = 0; index < candidates.length; index += 1) {
+    const value = candidates[index];
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+  return '';
+}
+
+function buildStructureFromGraph(nodes, edges) {
+  const projectGraph = { nodes: [], edges: [] };
+  const elementsGraph = { nodes: [], edges: [] };
+
+  const projectNodeMap = new Map();
+  const elementNodeMap = new Map();
+  const projectChildren = new Map();
+  const nodeLinks = new Map();
+
+  nodes.forEach((node) => {
+    if (!node) {
+      return;
+    }
+    const id = normaliseId(node.id);
+    if (!id) {
+      return;
+    }
+    const meta = node.meta && typeof node.meta === 'object' ? node.meta : {};
+    const builderRaw =
+      typeof meta.builder === 'string' ? meta.builder.trim().toLowerCase() : '';
+    const isProjectNode =
+      builderRaw === 'project' || meta.projectData !== undefined;
+    const isElementNode =
+      builderRaw === 'elements' ||
+      meta.elementData !== undefined ||
+      meta.elementType !== undefined;
+
+    if (isProjectNode) {
+      const label =
+        pickFirstString(
+          meta.projectData?.title,
+          node.label,
+          meta.title,
+          meta.name
+        ) || id;
+      const type = pickFirstString(
+        meta.projectData?.type,
+        meta.type,
+        'project'
+      ) || 'project';
+      const entry = {
+        id,
+        label,
+        type,
+        builder: 'project',
+        children: [],
+        links: [],
+      };
+      projectGraph.nodes.push(entry);
+      projectNodeMap.set(id, entry);
+      projectChildren.set(id, new Set());
+      nodeLinks.set(id, new Map());
+      return;
+    }
+
+    if (isElementNode) {
+      const label =
+        pickFirstString(
+          meta.elementData?.title,
+          node.label,
+          meta.title,
+          meta.name
+        ) || id;
+      const elementType = pickFirstString(
+        meta.elementData?.type,
+        meta.elementType,
+        meta.type,
+        'element'
+      ) || 'element';
+      const entry = {
+        id,
+        label,
+        type: elementType,
+        builder: 'elements',
+        links: [],
+      };
+      elementsGraph.nodes.push(entry);
+      elementNodeMap.set(id, entry);
+      nodeLinks.set(id, new Map());
+    }
+  });
+
+  const projectEdgeSet = new Set();
+  const elementEdgeSet = new Set();
+
+  function addEdge(target, cache, from, to, type) {
+    const key = `${from}->${to}:${type}`;
+    if (cache.has(key)) {
+      return;
+    }
+    cache.add(key);
+    target.push({ from, to, type });
+  }
+
+  function addLink(sourceId, targetId, type) {
+    const linkBucket = nodeLinks.get(sourceId);
+    if (!linkBucket) {
+      return;
+    }
+    const key = `${targetId}:${type}`;
+    if (linkBucket.has(key)) {
+      return;
+    }
+    linkBucket.set(key, { to: targetId, type });
+  }
+
+  edges.forEach((edge) => {
+    if (!edge) {
+      return;
+    }
+    const fromId = normaliseId(edge.from);
+    const toId = normaliseId(edge.to);
+    if (!fromId || !toId) {
+      return;
+    }
+    const type =
+      typeof edge.type === 'string' && edge.type.trim()
+        ? edge.type.trim().toUpperCase()
+        : 'LINKS_TO';
+    const fromIsProject = projectNodeMap.has(fromId);
+    const toIsProject = projectNodeMap.has(toId);
+    const fromIsElement = elementNodeMap.has(fromId);
+    const toIsElement = elementNodeMap.has(toId);
+
+    if (type === 'CHILD_OF' && fromIsProject && toIsProject) {
+      addEdge(projectGraph.edges, projectEdgeSet, fromId, toId, type);
+      const childrenSet = projectChildren.get(fromId);
+      if (childrenSet) {
+        childrenSet.add(toId);
+      }
+    }
+
+    if (fromIsElement || toIsElement) {
+      addEdge(elementsGraph.edges, elementEdgeSet, fromId, toId, type);
+    }
+
+    const crossesGraphs =
+      (fromIsProject && toIsElement) || (fromIsElement && toIsProject);
+    if (crossesGraphs) {
+      addLink(fromId, toId, type);
+      addLink(toId, fromId, type);
+    }
+  });
+
+  projectGraph.nodes.forEach((node) => {
+    const childrenSet = projectChildren.get(node.id);
+    node.children = childrenSet ? Array.from(childrenSet) : [];
+    const linkBucket = nodeLinks.get(node.id);
+    node.links = linkBucket ? Array.from(linkBucket.values()) : [];
+  });
+
+  elementsGraph.nodes.forEach((node) => {
+    const linkBucket = nodeLinks.get(node.id);
+    node.links = linkBucket ? Array.from(linkBucket.values()) : [];
+  });
+
+  return {
+    project_graph: projectGraph,
+    elements_graph: elementsGraph,
+  };
+}
+
+async function loadProjectStructure(projectId) {
+  if (!projectId) {
+    return sanitiseStructure({});
+  }
+  const session = getWriteSession();
+  try {
+    const result = await session.writeTransaction((tx) =>
+      tx.run(
+        `MATCH (n:ProjectNode)
+         WHERE coalesce(n.project_id, $projectId) = $projectId
+         SET n.project_id = coalesce(n.project_id, $projectId)
+         WITH n
+         OPTIONAL MATCH (n)-[r]->(m:ProjectNode)
+         WHERE coalesce(m.project_id, $projectId) = $projectId
+         RETURN collect(DISTINCT n) AS nodes,
+                collect(DISTINCT { from: n.id, to: m.id, type: type(r) }) AS edges`,
+        { projectId }
+      )
+    );
+    const record = result.records[0];
+    const rawNodes = record?.get('nodes') || [];
+    const rawEdges = (record?.get('edges') || []).filter(
+      (edge) => edge && edge.from && edge.to
+    );
+    const extractedNodes = rawNodes.map((node) => {
+      const extracted = extractNode(node);
+      if (!extracted.project_id) {
+        extracted.project_id = projectId;
+      }
+      return extracted;
+    });
+    const extractedEdges = rawEdges.map((edge) => ({
+      from: normaliseId(edge.from),
+      to: normaliseId(edge.to),
+      type:
+        typeof edge.type === 'string' && edge.type.trim()
+          ? edge.type.trim().toUpperCase()
+          : 'LINKS_TO',
+    }));
+    const structure = buildStructureFromGraph(extractedNodes, extractedEdges);
+    return sanitiseStructure(structure);
+  } finally {
+    await session.close();
+  }
 }
 
 function sanitiseMeta(meta = {}, fallbacks = {}) {
@@ -670,18 +964,37 @@ async function runUnlinkNodes(args, memory) {
   }
 }
 
-function runGetWorkingMemory() {
+async function runGetWorkingMemory(memory) {
   const snapshot = getWorkingMemorySnapshot();
-  return { memory: snapshot ?? null, __skipNormalise: true };
+  const baseMemory = snapshot ? { ...snapshot } : normaliseMemory(memory);
+  const includeStructure =
+    baseMemory?.config?.include_project_structure !== false;
+  const projectId = resolveProjectId(baseMemory);
+  const projectStructure = includeStructure
+    ? await loadProjectStructure(projectId)
+    : sanitiseStructure({});
+  const nextMemory = {
+    ...baseMemory,
+    project_structure: projectStructure,
+  };
+  setWorkingMemorySnapshot(nextMemory);
+  return { memory: nextMemory, __skipNormalise: true };
 }
 
-function runUpdateWorkingMemory(args, memory) {
+async function runUpdateWorkingMemory(args, memory) {
   const { memory_json: memoryJson } = ensureObject(args);
   if (!memoryJson || typeof memoryJson !== 'object') {
     throw new ToolError('memory_json must be an object');
   }
   const baseMemory = getWorkingMemorySnapshot() || memory;
   const nextMemory = mergeWorkingMemory(baseMemory, memoryJson);
+  const includeStructure =
+    nextMemory?.config?.include_project_structure !== false;
+  const projectId = resolveProjectId(nextMemory);
+  const projectStructure = includeStructure
+    ? await loadProjectStructure(projectId)
+    : sanitiseStructure({});
+  nextMemory.project_structure = projectStructure;
   setWorkingMemorySnapshot(nextMemory);
   return { memory: nextMemory, __skipNormalise: true };
 }
@@ -707,7 +1020,7 @@ const toolHandlers = {
   deleteNode: runDeleteNode,
   linkNodes: runLinkNodes,
   unlinkNodes: runUnlinkNodes,
-  getWorkingMemory: async () => runGetWorkingMemory(),
+  getWorkingMemory: async (_, memory) => runGetWorkingMemory(memory),
   updateWorkingMemory: async (args, memory) => runUpdateWorkingMemory(args, memory),
   updateThought: async (args, memory) => runUpdateThought(args, memory),
 };
@@ -716,9 +1029,28 @@ router.get('/tools', (req, res) => {
   res.json({ tools: toolSchemas });
 });
 
-router.get('/working-memory', (req, res) => {
-  const snapshot = getWorkingMemorySnapshot();
-  res.json(snapshot ?? null);
+router.get('/working-memory', async (req, res, next) => {
+  try {
+    const snapshot = getWorkingMemorySnapshot();
+    if (!snapshot) {
+      res.json(null);
+      return;
+    }
+    const includeStructure =
+      snapshot?.config?.include_project_structure !== false;
+    const projectId = resolveProjectId(snapshot);
+    const projectStructure = includeStructure
+      ? await loadProjectStructure(projectId)
+      : sanitiseStructure({});
+    const nextMemory = {
+      ...snapshot,
+      project_structure: projectStructure,
+    };
+    setWorkingMemorySnapshot(nextMemory);
+    res.json(nextMemory);
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.post('/call', async (req, res, next) => {

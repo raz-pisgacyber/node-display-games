@@ -162,3 +162,10 @@
   - Updated the `getWorkingMemory` tool to return the live snapshot and added a GET `/mcp/working-memory` endpoint for stateless fetches.
   - Ensured `updateWorkingMemory` persists updates to the shared store while keeping other MCP tools unchanged.
 - Verification: Not run (infrastructure-only changes).
+## 2025-11-03 12:00 UTC
+- Files modified: `mcp/index.js`, `modules/common/workingMemory.js`, `modules/elements/elements.js`, `modules/project/project.js`.
+- Completed tasks:
+  - Taught the MCP working-memory tools to pull complete project and element graphs from Neo4j, normalising nodes with builder, children, and cross-graph link metadata before persisting snapshots.
+  - Refreshed browser-side sanitisation, defaults, and node-scoped exports to support the new `project_graph`/`elements_graph` schema while keeping viewer behaviour intact.
+  - Updated project and element builders to tag working-memory nodes with their originating builders for consistent downstream processing.
+- Verification: Not run (no automated test suite provided).
