@@ -30,6 +30,15 @@
 - Agents must always update the Agent History at the end of this file after completing work.
 - The current visual design of the Project Builder and Elements Builder is approved. Functional changes must not alter layout, styles, or interaction aesthetics.
 
+## MCP Interface Layer
+
+- The `/mcp` router exposes AI-facing tools that wrap existing graph routes and the browser-managed working memory JSON.
+- Tool metadata is published via `GET /mcp/tools`; tool invocations are sent to `POST /mcp/call` with `{ tool, arguments, memory }`.
+- Every tool handler returns an updated working-memory snapshot so orchestration loops can feed the next turn without additional fetches.
+- Graph tools (`createNode`, `updateNode`, `deleteNode`, `linkNodes`, `unlinkNodes`) reuse the same Neo4j/MySQL helpers as the REST API and automatically scope work to the active `project_id` found in the provided memory.
+- Working-memory helpers (`getWorkingMemory`, `updateWorkingMemory`) treat the provided JSON as the source of truth and return normalised structures with derived `last_user_message` fields.
+- `updateThought` emits transient reasoning data for the UI while leaving persisted graph state untouched.
+
 ## Discussion Card Updates
 
 - Discussion panels now render chat-style conversations shared between the user and the AI helper while preserving the existing card footprint and visual language.
@@ -65,3 +74,5 @@ Converted node discussion cards into chat-driven panels backed by `/api/messages
 Migrated working memory to a browser-managed store, introduced a Working Memory Settings panel plus viewer, and removed the server-side workingMemory module while teaching all builders to keep the local JSON snapshot synced with project, node, and message updates.
 ## [2025-10-30 14:30 UTC] - codex
 Stabilised the Working Memory Settings panel so inputs stay focused during live updates and refreshed `agent.md` to document the browser-side store, helper APIs, and viewer integration.
+## [2025-10-31 18:15 UTC] - codex
+Introduced an `/mcp` interface that maps structured AI tool calls onto existing graph/link endpoints, normalises working-memory JSON in both directions, and exposes schema metadata for orchestration clients.

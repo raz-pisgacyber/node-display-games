@@ -4,6 +4,7 @@ const morgan = require('morgan');
 
 const config = require('./src/config');
 const apiRouter = require('./src/routes/api');
+const mcpRouter = require('./mcp');
 const { closeNeo4j, verifyNeo4jConnection } = require('./src/db/neo4j');
 const { closeMysql, initMysql } = require('./src/db/mysql');
 
@@ -18,6 +19,7 @@ app.use('/core', express.static(path.join(__dirname, 'core')));
 app.use(express.static(path.join(__dirname, 'modules', 'hub')));
 
 app.use('/api', apiRouter);
+app.use('/mcp', mcpRouter);
 
 app.get('/favicon.ico', (req, res) => {
   res.status(204).end();

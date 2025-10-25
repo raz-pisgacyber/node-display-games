@@ -139,3 +139,11 @@
   - Simplified the working memory payload to strip layout/UI fields, retaining only ids, labels, and builder notes/project data across project structure and node context snapshots.
   - Added node-scoped working memory viewers with automatic active-node tracking in all builders, including toolbar entry points and session updates triggered by node selection.
   - Expanded the settings panel with auto-refresh configuration and a reset control backed by localStorage, keeping the browser-managed store authoritative.
+- Verification: Manual testing not recorded.
+## 2025-10-31 18:15 UTC
+- Files modified: `mcp/index.js`, `server.js`, `AGENTS.md`, `agent_history`.
+- Completed tasks:
+  - Added an `/mcp` router that advertises tool schemas and executes graph/link mutations through existing Neo4j/MySQL helpers while scoping work to the project id embedded in working memory.
+  - Normalised working-memory payload handling so every tool call returns a ready-to-use snapshot and transient thought updates stay ephemeral.
+  - Documented the MCP interface inside `AGENTS.md` and updated both history logs to capture the new orchestration layer.
+- Verification: Not run (infrastructure-only changes).
