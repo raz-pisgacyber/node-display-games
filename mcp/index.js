@@ -108,12 +108,17 @@ const toolSchemas = [
     description: 'Persist a transcript entry for the active session.',
     input_schema: {
       type: 'object',
-      required: ['message_type', 'content'],
+      required: ['message_type', 'role', 'content'],
       properties: {
         message_type: {
           type: 'string',
           description: 'Classify the message intent.',
           enum: ['user_reply', 'inner_process'],
+        },
+        role: {
+          type: 'string',
+          description:
+            'Logical origin of the message. Examples: user, assistant, reflector, tool_user, decider, tool_result, planner, summarizer.',
         },
         content: {
           type: 'string',
@@ -165,12 +170,7 @@ class ToolError extends Error {
   }
 }
 
-const MESSAGE_TYPE_ROLE_MAP = {
-  user_reply: 'user',
-  inner_process: 'reflector',
-};
-
-const VALID_MESSAGE_TYPES = new Set(Object.keys(MESSAGE_TYPE_ROLE_MAP));
+const VALID_MESSAGE_TYPES = new Set(['user_reply', 'inner_process']);
 
 function ensureObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -932,11 +932,15 @@ async function runGetWorkingMemory(memory) {
 }
 
 async function runSendMessage(args, memory) {
-  const { message_type: messageTypeRaw, content } = ensureObject(args);
+  const { message_type: messageTypeRaw, role: roleRaw, content } = ensureObject(args);
   const messageType =
     typeof messageTypeRaw === 'string' ? messageTypeRaw.trim() : '';
   if (!VALID_MESSAGE_TYPES.has(messageType)) {
     throw new ToolError('message_type must be either user_reply or inner_process');
+  }
+  const role = typeof roleRaw === 'string' ? roleRaw.trim() : '';
+  if (!role) {
+    throw new ToolError('role must be a non-empty string');
   }
   if (typeof content !== 'string' || !content.trim()) {
     throw new ToolError('content must be a non-empty string');
@@ -954,7 +958,6 @@ async function runSendMessage(args, memory) {
     typeof nodeIdSource === 'string' ? nodeIdSource.trim() : '';
   const nodeId = nodeIdTrimmed ? nodeIdTrimmed : null;
   const trimmedContent = content.trim();
-  const role = MESSAGE_TYPE_ROLE_MAP[messageType] || 'user';
   const [result] = await executeWithLogging(
     pool,
     'INSERT INTO messages (session_id, node_id, role, content, message_type) VALUES (?, ?, ?, ?, ?)',
