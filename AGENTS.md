@@ -39,6 +39,41 @@
 - Working-memory helpers (`getWorkingMemory`, `updateWorkingMemory`) treat the provided JSON as the source of truth and return normalised structures with derived `last_user_message` fields.
 - `updateThought` emits transient reasoning data for the UI while leaving persisted graph state untouched.
 
+## Working memory schema expectations
+
+- Working memory snapshots must follow the streamlined structure below. Only include the minimal fields and avoid duplicating metadata across sections.
+  ```json
+  {
+    "session": { "session_id": "", "project_id": "", "active_node_id": "", "timestamp": "" },
+    "project_structure": {
+      "nodes": [{ "id": "", "label": "", "type": "" }],
+      "edges": [{ "from": "", "to": "", "type": "" }]
+    },
+    "node_context": {
+      "id": "", "label": "", "type": "",
+      "meta": {
+        "notes": "",
+        "customFields": [{ "key": "", "value": "" }],
+        "linked_elements": [{ "id": "", "label": "", "type": "" }]
+      }
+    },
+    "fetched_context": {},
+    "working_history": "",
+    "messages": [],
+    "last_user_message": "",
+    "config": {
+      "history_length": 20,
+      "include_project_structure": true,
+      "include_context": true,
+      "include_working_history": true,
+      "auto_refresh_interval": 0
+    }
+  }
+  ```
+- `project_structure.nodes` must never carry meta or builder payloads—only identifiers, labels, and a lightweight `type` string.
+- `node_context.meta` is the single source of truth for node metadata. Persist only the active node’s notes, custom fields, and linked element summaries.
+- Autosave, manual saves, and refresh flows should update `node_context.meta` for the active node and fetch a fresh `project_structure` snapshot when needed without bloating payloads.
+
 ## Discussion Card Updates
 
 - Discussion panels now render chat-style conversations shared between the user and the AI helper while preserving the existing card footprint and visual language.
@@ -76,3 +111,8 @@ Migrated working memory to a browser-managed store, introduced a Working Memory 
 Stabilised the Working Memory Settings panel so inputs stay focused during live updates and refreshed `agent.md` to document the browser-side store, helper APIs, and viewer integration.
 ## [2025-10-31 18:15 UTC] - codex
 Introduced an `/mcp` interface that maps structured AI tool calls onto existing graph/link endpoints, normalises working-memory JSON in both directions, and exposes schema metadata for orchestration clients.
+
+## [2025-11-01 09:30 UTC] - codex
+Summary of work completed: Standardised the browser and MCP working-memory builders around the minimal schema, removing duplicate metadata from project structures while keeping active-node context rich with notes, custom fields, and linked element summaries.
+Key implementation details or architectural notes: Updated all builders to emit `project_structure` nodes with only `{id,label,type}`, rewrote working-memory sanitisation on both client and MCP layers, and ensured autosave/refresh routines exclusively persist the active node’s meta payload.
+Next steps or handoff notes: Monitor future feature work for schema drift and extend linked-element snapshots if additional relationship metadata becomes essential.

@@ -147,3 +147,11 @@
   - Normalised working-memory payload handling so every tool call returns a ready-to-use snapshot and transient thought updates stay ephemeral.
   - Documented the MCP interface inside `AGENTS.md` and updated both history logs to capture the new orchestration layer.
 - Verification: Not run (infrastructure-only changes).
+
+## 2025-11-01 09:30 UTC
+- Files modified: `modules/common/workingMemory.js`, `modules/project/project.js`, `modules/elements/elements.js`, `modules/main/main.js`, `mcp/index.js`, `AGENTS.md`.
+- Completed tasks:
+  - Refactored working-memory builders to emit minimal `project_structure` nodes with `{id,label,type}` and moved all metadata into the active `node_context.meta` bundle.
+  - Synced autosave and refresh flows to update only the active node’s metadata while reloading lightweight project structures, trimming autosave payloads.
+  - Hardened client and MCP sanitisation so snapshots always match the documented schema, and documented the expectations in `AGENTS.md`.
+- Verification: Manual reasoning only; no automated tests are present.

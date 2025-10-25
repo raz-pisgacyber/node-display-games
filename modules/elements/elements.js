@@ -53,20 +53,61 @@ function cloneForMemory(value) {
   }
 }
 
+function sanitiseCustomFields(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((field) => {
+      if (!field || typeof field !== 'object') {
+        return null;
+      }
+      const key = typeof field.key === 'string' ? field.key.trim() : '';
+      const value = typeof field.value === 'string' ? field.value : '';
+      if (!key && !value) {
+        return null;
+      }
+      return { key, value };
+    })
+    .filter(Boolean);
+}
+
+function sanitiseLinkedProjects(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((item) => {
+      if (!item || typeof item !== 'object' || !item.id) {
+        return null;
+      }
+      return {
+        id: String(item.id),
+        label: typeof item.label === 'string' && item.label ? item.label : String(item.id),
+        type: 'project',
+      };
+    })
+    .filter(Boolean);
+}
+
 function buildWorkingMemoryMeta(meta = {}, extras = {}) {
   const source = meta && typeof meta === 'object' ? meta : {};
   const result = {};
-  const builder = source.builder ?? extras.builder;
-  if (builder) {
-    result.builder = builder;
+  const noteCandidates = [extras.notes, source.notes, source.elementData?.notes];
+  const note = noteCandidates.find((value) => typeof value === 'string' && value.trim());
+  if (note) {
+    result.notes = note;
   }
-  const notes = extras.notes ?? source.notes;
-  if (typeof notes === 'string' && notes.trim()) {
-    result.notes = notes;
+  const customFieldsSource =
+    extras.customFields || source.customFields || source.elementData?.customFields || [];
+  const customFields = sanitiseCustomFields(customFieldsSource);
+  if (customFields.length) {
+    result.customFields = cloneForMemory(customFields);
   }
-  const projectData = source.projectData ?? extras.projectData;
-  if (projectData && typeof projectData === 'object') {
-    result.projectData = cloneForMemory(projectData);
+  const linkedSource = extras.linked_elements || extras.linkedProjects || source.linked_elements || [];
+  const linkedProjects = sanitiseLinkedProjects(linkedSource);
+  if (linkedProjects.length) {
+    result.linked_elements = cloneForMemory(linkedProjects);
   }
   return result;
 }
@@ -78,10 +119,13 @@ function buildNodeContextFromInstance(node) {
   const context = {
     id: node.id,
     label: node.title || '',
+    type: node.type || node.meta?.elementType || 'element',
     meta: buildWorkingMemoryMeta(node.meta || {}, {
       notes: typeof node.notes === 'string' ? node.notes : node.meta?.notes,
-      projectData: node.meta?.projectData ?? node.data,
-      builder: node.meta?.builder || 'elements',
+      customFields: node.data?.customFields ?? node.meta?.elementData?.customFields,
+      linked_elements: (typeof node.ensureLinkState === 'function'
+        ? node.ensureLinkState()?.items
+        : node.linkState?.items) || [],
     }),
   };
   return context;
@@ -104,11 +148,7 @@ function buildElementsStructure(projectId, linkManager) {
       payloadNodes.push({
         id: String(instance.id),
         label: instance.title || '',
-        meta: buildWorkingMemoryMeta(instance.meta || {}, {
-          notes: typeof instance.notes === 'string' ? instance.notes : instance.meta?.notes,
-          projectData: instance.meta?.projectData ?? instance.data,
-          builder: instance.meta?.builder || 'elements',
-        }),
+        type: instance.type || instance.meta?.elementType || 'element',
       });
     });
   }

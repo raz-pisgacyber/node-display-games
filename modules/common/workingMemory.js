@@ -235,20 +235,64 @@ function normaliseAutoRefreshInterval(value) {
   return parsed;
 }
 
+function sanitiseCustomFields(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((field) => {
+      if (!field || typeof field !== 'object') {
+        return null;
+      }
+      const key = safeString(field.key ?? '').trim();
+      const value = safeString(field.value ?? '');
+      return { key, value };
+    })
+    .filter((field) => field && (field.key || field.value));
+}
+
+function sanitiseLinkedElements(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const id = safeString(entry.id);
+      if (!id) {
+        return null;
+      }
+      return {
+        id,
+        label: safeString(entry.label || id),
+        type: safeString(entry.type || ''),
+      };
+    })
+    .filter(Boolean);
+}
+
 function sanitiseMeta(meta = {}, fallback = {}) {
   const source = typeof meta === 'object' && meta ? meta : {};
   const result = {};
-  const builder = source.builder ?? fallback.builder;
-  if (builder) {
-    result.builder = safeString(builder);
-  }
   const notes = source.notes ?? fallback.notes;
   if (typeof notes === 'string' && notes.trim()) {
     result.notes = notes;
   }
-  const projectData = source.projectData ?? fallback.projectData;
-  if (projectData && typeof projectData === 'object') {
-    result.projectData = cloneJson(projectData);
+  const customFields = source.customFields ?? fallback.customFields;
+  if (customFields) {
+    const sanitised = sanitiseCustomFields(customFields);
+    if (sanitised.length) {
+      result.customFields = sanitised;
+    }
+  }
+  const linkedElements = source.linked_elements ?? fallback.linked_elements;
+  if (linkedElements) {
+    const sanitised = sanitiseLinkedElements(linkedElements);
+    if (sanitised.length) {
+      result.linked_elements = sanitised;
+    }
   }
   return result;
 }
@@ -261,15 +305,10 @@ function sanitiseStructureNode(node) {
   if (!id) {
     return null;
   }
-  const meta = sanitiseMeta(node.meta, {
-    notes: node.notes,
-    projectData: node.projectData,
-    builder: node.builder,
-  });
   return {
     id,
     label: safeString(node.label ?? node.title ?? ''),
-    meta,
+    type: safeString(node.type ?? node.builder ?? ''),
   };
 }
 
@@ -309,10 +348,11 @@ function sanitiseNodeContext(context) {
   const nodeContext = {
     id: safeString(context.id ?? context.node_id ?? ''),
     label: safeString(context.label ?? context.title ?? ''),
+    type: safeString(context.type ?? context.builder ?? ''),
     meta: sanitiseMeta(context.meta, {
       notes: context.notes,
-      projectData: context.projectData,
-      builder: context.builder,
+      customFields: context.customFields,
+      linked_elements: context.linked_elements,
     }),
   };
   return nodeContext;
