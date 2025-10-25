@@ -198,3 +198,11 @@
   - Documented the schema, current reconstruction logic, and the causes of partial `project_structure` payloads across the Project and Elements builders.
   - Proposed a unified loading strategy, refresh triggers, and consistency safeguards so working memory always carries both hierarchical and relational graphs.
 - Verification: Not run (documentation-only change).
+
+## 2025-11-10 11:00 UTC
+- Files modified: `modules/common/workingMemory.js`, `mcp/index.js`, `agent_history`.
+- Completed tasks:
+  - Added a persistent per-project cache for unified Neo4j graph snapshots so working memory keeps both project and element slices when switching builders.
+  - Hydrated builder initialisation from the cached structure and taught project-structure writes to backfill missing graphs with the last known data before persisting updates.
+  - Updated the MCP `getWorkingMemory` tool to reload the latest project structure directly from Neo4j, guaranteeing parity with the browser snapshot for orchestration clients.
+- Verification: Not run (no automated test suite available).

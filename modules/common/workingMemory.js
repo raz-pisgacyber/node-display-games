@@ -1,6 +1,7 @@
 const MEMORY_STORAGE_KEY = 'story-graph-working-memory';
 const SETTINGS_STORAGE_KEY = 'story-graph-working-memory-settings';
 const SESSION_STORAGE_PREFIX = 'story-graph-session:';
+const STRUCTURE_STORAGE_PREFIX = 'story-graph-structure:';
 
 const DEFAULT_SETTINGS = {
   history_length: 20,
@@ -14,6 +15,8 @@ const MAX_HISTORY_LENGTH = 200;
 
 let settings = loadSettings();
 let memory = loadMemory();
+
+const projectStructureCache = new Map();
 
 const memoryListeners = new Set();
 const settingsListeners = new Set();
@@ -437,6 +440,92 @@ function sanitiseStructure(structure) {
   };
 }
 
+function graphIsEmpty(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  return nodes.length === 0 && edges.length === 0;
+}
+
+function getStructureStorageKey(projectId) {
+  const id = safeString(projectId);
+  return `${STRUCTURE_STORAGE_PREFIX}${id}`;
+}
+
+function getCachedProjectStructure(projectId) {
+  const id = safeString(projectId);
+  if (!id) {
+    return null;
+  }
+  if (projectStructureCache.has(id)) {
+    return sanitiseStructure(projectStructureCache.get(id));
+  }
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(getStructureStorageKey(id));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    const sanitised = sanitiseStructure(parsed);
+    projectStructureCache.set(id, sanitised);
+    return sanitiseStructure(sanitised);
+  } catch (error) {
+    console.warn('Failed to load cached project structure', error);
+    return null;
+  }
+}
+
+function storeCachedProjectStructure(projectId, structure) {
+  const id = safeString(projectId);
+  if (!id) {
+    return;
+  }
+  const sanitised = sanitiseStructure(structure);
+  projectStructureCache.set(id, sanitised);
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(getStructureStorageKey(id), JSON.stringify(sanitised));
+  } catch (error) {
+    console.warn('Failed to persist project structure cache', error);
+  }
+}
+
+function clearCachedProjectStructure(projectId) {
+  if (!projectId) {
+    projectStructureCache.clear();
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const keys = Object.keys(window.localStorage);
+        keys
+          .filter((key) => key.startsWith(STRUCTURE_STORAGE_PREFIX))
+          .forEach((key) => {
+            window.localStorage.removeItem(key);
+          });
+      } catch (error) {
+        console.warn('Failed to clear cached project structures', error);
+      }
+    }
+    return;
+  }
+  const id = safeString(projectId);
+  if (!id) {
+    return;
+  }
+  projectStructureCache.delete(id);
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(getStructureStorageKey(id));
+  } catch (error) {
+    console.warn('Failed to remove cached project structure', error);
+  }
+}
+
 function sanitiseNodeContext(context) {
   if (!context || typeof context !== 'object') {
     return {};
@@ -668,6 +757,10 @@ export function initialiseWorkingMemory({ projectId, sessionId, activeNodeId } =
   memory = buildDefaultMemory(settings);
   if (projectId !== undefined) {
     memory.session.project_id = safeString(projectId);
+    const cachedStructure = getCachedProjectStructure(projectId);
+    if (cachedStructure) {
+      memory.project_structure = sanitiseStructure(cachedStructure);
+    }
   }
   if (storedSession) {
     memory.session.session_id = safeString(storedSession.id);
@@ -734,7 +827,9 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
     }
     return getWorkingMemorySnapshot();
   }
-  const current = sanitiseStructure(target.project_structure || {});
+  const projectId = safeString(target.session.project_id || structure.project_id || '');
+  const cached = projectId ? getCachedProjectStructure(projectId) : null;
+  const current = sanitiseStructure(target.project_structure || cached || {});
   const next = {
     project_graph: current.project_graph,
     elements_graph: current.elements_graph,
@@ -759,6 +854,15 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
       next.project_graph = sanitisedProject;
       updated = true;
     }
+  } else if (!hasLegacyGraph && cached && graphIsEmpty(current.project_graph)) {
+    const cachedProject = sanitiseGraph(cached.project_graph);
+    if (!graphsEqual(current.project_graph, cachedProject)) {
+      next.project_graph = cachedProject;
+      updated = true;
+      if (!graphIsEmpty(cachedProject)) {
+        receivedUpdate = true;
+      }
+    }
   }
 
   if (hasElementsGraph) {
@@ -767,6 +871,15 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
     if (!graphsEqual(current.elements_graph, sanitisedElements)) {
       next.elements_graph = sanitisedElements;
       updated = true;
+    }
+  } else if (cached && graphIsEmpty(current.elements_graph)) {
+    const cachedElements = sanitiseGraph(cached.elements_graph);
+    if (!graphsEqual(current.elements_graph, cachedElements)) {
+      next.elements_graph = cachedElements;
+      updated = true;
+      if (!graphIsEmpty(cachedElements)) {
+        receivedUpdate = true;
+      }
     }
   }
 
@@ -788,6 +901,9 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
   }
 
   target.project_structure = sanitiseStructure(next);
+  if (projectId) {
+    storeCachedProjectStructure(projectId, target.project_structure);
+  }
   commitMemory();
   return getWorkingMemorySnapshot();
 }
