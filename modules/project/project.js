@@ -155,6 +155,7 @@ function buildProjectStructureSnapshot(projectId) {
         id: String(instance.id),
         label: instance.title || '',
         type: 'project',
+        builder: 'project',
       });
       if (Array.isArray(instance.children)) {
         instance.children.forEach((child) => {

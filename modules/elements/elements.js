@@ -149,6 +149,7 @@ function buildElementsStructure(projectId, linkManager) {
         id: String(instance.id),
         label: instance.title || '',
         type: instance.type || instance.meta?.elementType || 'element',
+        builder: 'elements',
       });
     });
   }
