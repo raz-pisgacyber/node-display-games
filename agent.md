@@ -1,26 +1,34 @@
 # Working Memory Layer
 
-The working memory snapshot now lives entirely in the browser. It is stored in
-`localStorage` and mirrored in in-process state so the UI can render without
-serialising on every read.
+Working memory now persists in MySQL as a modular "LEGO" snapshot. Each
+section—session, project structure, node context, fetched context, working
+history, messages, last user message, and config—is stored independently and
+composed on demand by both the browser UI and the MCP interface.
 
 ## Storage modules
 
-- `modules/common/workingMemory.js` – owns the canonical snapshot and exposes
-  helper functions for initialisation, mutation, settings management, and
-  subscriptions. The JSON payload is persisted under the
-  `story-graph-working-memory` key.
-- `modules/common/workingMemoryViewer.js` – lightweight overlay that
-  subscribes to the working-memory store and renders a read-only JSON preview.
+- `modules/common/workingMemory.js` owns the in-browser cache. It fetches
+  working-memory parts from `/api/working-memory`, pushes granular updates via
+  `PATCH /api/working-memory/:part`, and keeps the live snapshot sanitised for
+  UI consumers.
+- `modules/common/workingMemoryViewer.js` subscribes to the store and renders a
+  read-only JSON preview for debugging.
+
+The Node server exposes matching helpers in `src/utils/workingMemoryStore.js`
+and reuses them inside the MCP toolchain so AI callers see the same assembled
+memory.
 
 ## JSON contract
 
-Working memory always serialises to the following shape:
+Working memory serialises to the minimal schema defined in `AGENTS.md`:
 
 ```
 {
   "session": { "session_id": "", "project_id": "", "active_node_id": "", "timestamp": "" },
-  "project_structure": {},
+  "project_structure": {
+    "project_graph": { "nodes": [], "edges": [] },
+    "elements_graph": { "nodes": [], "edges": [] }
+  },
   "node_context": {},
   "fetched_context": {},
   "working_history": "",
@@ -30,54 +38,44 @@ Working memory always serialises to the following shape:
     "history_length": 20,
     "include_project_structure": true,
     "include_context": true,
-    "include_working_history": true
+    "include_working_history": true,
+    "auto_refresh_interval": 0
   }
 }
 ```
 
-- Only `messages` and `working_history` originate from SQL queries. All other
-  fields are sourced from live client state and refreshed as the user edits the
-  project.
-- Sanitisation functions in `workingMemory.js` enforce valid JSON and clamp the
-  history length (max 200) before persisting.
+Client and server sanitisation clamp message history (max 200), strip builder
+payloads from graph nodes, and ensure config toggles immediately hide disabled
+sections.
 
 ## Update helpers
 
-`modules/common/workingMemory.js` exposes fine-grained setters so builders can
-refresh one portion of the snapshot without touching the rest:
+`modules/common/workingMemory.js` exports fine-grained setters so builders can
+refresh only the relevant slice while the server persists each piece:
 
 - `initialiseWorkingMemory({ projectId, sessionId, activeNodeId })`
 - `setWorkingMemorySession(partial)`
 - `setWorkingMemoryProjectStructure(structure)`
 - `setWorkingMemoryNodeContext(context)`
 - `setWorkingMemoryFetchedContext(context)`
-- `setWorkingMemoryMessages(messages)`
-- `appendWorkingMemoryMessage(message)`
+- `setWorkingMemoryMessages(messages)` / `appendWorkingMemoryMessage(message)`
 - `setWorkingMemoryWorkingHistory(value)`
 - `updateWorkingMemorySettings(partial)` / `getWorkingMemorySettings()`
 - `subscribeWorkingMemory(listener)` / `subscribeWorkingMemorySettings(listener)`
 
-All setters merge into the in-memory copy, normalise input, persist to
-`localStorage`, and broadcast to subscribers so the viewer stays in sync.
+Each setter normalises input, updates the local cache, persists the matching SQL
+record, and notifies subscribers so the viewer and MCP responses stay in sync.
 
 ## Builder integration
 
 - **Main builder (`modules/main/main.js`)** keeps project structure, selected
   node context, messages, summaries, and session metadata aligned with the
-  snapshot. The Working Memory Settings panel writes directly to the settings
-  store and avoids destroying focused inputs on refresh.
+  shared snapshot. The Working Memory Settings panel writes through to the SQL
+  config part.
 - **Project builder (`modules/project/project.js`)** and **Elements builder
-  (`modules/elements/elements.js`)** push graph and node updates into the store
-  whenever nodes are selected or mutated. Each toolbar exposes a Working Memory
-  icon that opens the shared viewer modal for debugging.
+  (`modules/elements/elements.js`)** push graph and node updates into working
+  memory after each Neo4j mutation or selection change. The toolbar Working
+  Memory button still opens the shared viewer.
 
-When any builder loads a project, it calls `initialiseWorkingMemory` with the
-project id so the snapshot starts with a clean structure and reflects the
-current session.
-
-## Settings persistence
-
-Global working-memory settings are stored separately under the
-`story-graph-working-memory-settings` key. Toggling these options immediately
-updates the live snapshot (e.g. clearing `project_structure` when disabled) so
-subscribers never see stale data.
+All builders call `initialiseWorkingMemory` when a project loads so the session
+is hydrated from MySQL and ready for incremental updates.

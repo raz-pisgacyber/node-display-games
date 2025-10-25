@@ -14,6 +14,11 @@ const {
 } = require('../utils/neo4jHelpers');
 const { upsertNodeVersion, deleteNodeVersion } = require('../utils/nodeVersions');
 const { executeWithLogging, queryWithLogging } = require('../utils/mysqlLogger');
+const {
+  loadWorkingMemory,
+  saveWorkingMemoryPart,
+  WORKING_MEMORY_PARTS,
+} = require('../utils/workingMemoryStore');
 const router = express.Router();
 
 function ensureObject(value) {
@@ -64,6 +69,55 @@ router.get('/config', (req, res) => {
     default_project_id: config.defaults.projectId,
     version_poll_interval_ms: config.defaults.versionPollIntervalMs,
   });
+});
+
+router.get('/working-memory', async (req, res, next) => {
+  const sessionIdRaw = req.query?.session_id;
+  const projectIdRaw = req.query?.project_id;
+  const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
+  const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  if (!sessionId) {
+    res.status(400).json({ error: 'session_id is required' });
+    return;
+  }
+  try {
+    const { memory } = await loadWorkingMemory({ sessionId, projectId });
+    res.json({ memory });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/working-memory/:part', async (req, res, next) => {
+  const partName = typeof req.params.part === 'string' ? req.params.part.trim() : '';
+  const normalisedPart = partName === 'last_message' ? 'last_user_message' : partName;
+  if (!WORKING_MEMORY_PARTS.has(normalisedPart)) {
+    res.status(400).json({ error: 'Unknown working memory part' });
+    return;
+  }
+  const body = ensureObject(req.body);
+  const sessionIdRaw = body.session_id;
+  const projectIdRaw = body.project_id;
+  const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
+  if (!sessionId) {
+    res.status(400).json({ error: 'session_id is required' });
+    return;
+  }
+  const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  const value = body.value;
+  const options = ensureObject(body.options);
+  try {
+    const result = await saveWorkingMemoryPart({
+      sessionId,
+      projectId,
+      part: normalisedPart,
+      value,
+      options,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get('/projects', async (req, res, next) => {
