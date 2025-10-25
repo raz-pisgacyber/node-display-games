@@ -5,11 +5,14 @@ import AutosaveManager from '../common/autosaveManager.js';
 import { fetchGraph, createNode, createEdge, createCheckpoint } from '../common/api.js';
 import {
   initialiseWorkingMemory,
-  setWorkingMemoryProjectStructure,
   setWorkingMemoryNodeContext,
   setWorkingMemorySession,
 } from '../common/workingMemory.js';
 import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
+import {
+  rebuildProjectStructure,
+  syncProjectStructureToWorkingMemory,
+} from '../common/projectStructureService.js';
 
 const PROJECT_STORAGE_KEY = 'story-graph-project';
 const PROJECT_CONTEXT_STORAGE_KEY = 'story-graph-project-context';
@@ -134,54 +137,6 @@ function buildNodeContextFromInstance(node) {
     }),
   };
   return context;
-}
-
-function buildProjectStructureSnapshot(projectId) {
-  const nodes = [];
-  const edges = [];
-  if (NodeBase?.instances instanceof Map) {
-    NodeBase.instances.forEach((instance) => {
-      if (!instance) {
-        return;
-      }
-      if (projectId && instance.projectId && instance.projectId !== projectId) {
-        return;
-      }
-      const builderType = (instance.meta?.builder || '').toLowerCase();
-      if (builderType && builderType !== 'project') {
-        return;
-      }
-      nodes.push({
-        id: String(instance.id),
-        label: instance.title || '',
-        type: 'project',
-        builder: 'project',
-      });
-      if (Array.isArray(instance.children)) {
-        instance.children.forEach((child) => {
-          if (!child) return;
-          if (projectId && child.projectId && child.projectId !== projectId) {
-            return;
-          }
-          edges.push({
-            from: String(instance.id),
-            to: String(child.id),
-            type: 'CHILD_OF',
-          });
-        });
-      }
-    });
-  }
-  return { nodes, edges };
-}
-
-function syncWorkingMemoryStructure(projectId) {
-  if (projectId) {
-    setWorkingMemorySession({ project_id: projectId });
-  }
-  setWorkingMemoryProjectStructure({
-    project_graph: buildProjectStructureSnapshot(projectId),
-  });
 }
 
 function syncWorkingMemoryNode(node, projectId) {
@@ -339,7 +294,6 @@ function handleNodeMutated(event) {
   }
   state.autosave?.markNodeDirty(node, reason);
   syncWorkingMemoryNode(node, state.projectId);
-  syncWorkingMemoryStructure(state.projectId);
 }
 
 function attachNavigationGuard() {
@@ -472,9 +426,13 @@ const init = async (projectId) => {
 
   const workingMemoryButton = document.querySelector('[data-action="working-memory"]');
   if (workingMemoryButton) {
-    workingMemoryButton.addEventListener('click', () => {
+    workingMemoryButton.addEventListener('click', async () => {
       const lastNode = NodeBase.getLastInteractedNode?.();
-      syncWorkingMemoryStructure(state.projectId);
+      try {
+        await syncProjectStructureToWorkingMemory(state.projectId, { force: true });
+      } catch (error) {
+        console.warn('Failed to refresh project structure for working memory view', error);
+      }
       if (lastNode && (!state.projectId || lastNode.projectId === state.projectId)) {
         syncWorkingMemoryNode(lastNode, state.projectId);
       }
@@ -596,7 +554,11 @@ const init = async (projectId) => {
         console.error('Failed to link child node', edgeError);
         showStatusMessage('Child created but link failed', 'error');
       }
-      syncWorkingMemoryStructure(projectId);
+      try {
+        await rebuildProjectStructure(projectId);
+      } catch (structureError) {
+        console.warn('Failed to refresh project structure after adding child', structureError);
+      }
       syncWorkingMemoryNode(child, projectId);
       return child;
     } catch (error) {
@@ -667,11 +629,7 @@ const init = async (projectId) => {
     builderNodes.forEach((nodeData) => instantiateNode(nodeData));
 
     edges
-      .filter(
-        (edge) =>
-          (edge.props?.context || '').toLowerCase() === 'project' &&
-          (edge.type || '').toUpperCase() === 'CHILD_OF'
-      )
+      .filter((edge) => (edge.type || '').toUpperCase() === 'CHILD_OF')
       .forEach((edge) => {
         const parent = nodesById.get(edge.from);
         const child = nodesById.get(edge.to);
@@ -727,7 +685,11 @@ const init = async (projectId) => {
 
   log('Project builder initialised.');
 
-  syncWorkingMemoryStructure(state.projectId);
+  try {
+    await syncProjectStructureToWorkingMemory(state.projectId, { force: true });
+  } catch (error) {
+    console.warn('Failed to load project structure into working memory', error);
+  }
 
   window.builder = {
     util,

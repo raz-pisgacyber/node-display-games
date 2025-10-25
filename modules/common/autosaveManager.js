@@ -1,4 +1,5 @@
 import { updateNode, createEdge, deleteEdge, updateEdge } from './api.js';
+import { rebuildProjectStructure } from './projectStructureService.js';
 
 const DEFAULT_DELAY = 1700;
 const STATUS_IDLE = 'idle';
@@ -161,9 +162,12 @@ export default class AutosaveManager {
       }
     }
 
+    let structureChanged = false;
+
     for (const [key, entry] of Array.from(this.pendingLinks.entries())) {
       try {
-        await this.processLink(entry, { keepalive });
+        const changed = await this.processLink(entry, { keepalive });
+        structureChanged = structureChanged || changed;
         this.pendingLinks.delete(key);
       } catch (error) {
         console.error('Failed to persist link', entry, error);
@@ -181,6 +185,14 @@ export default class AutosaveManager {
 
     this.setStatus(STATUS_SAVED);
     this.setStatus(STATUS_IDLE);
+
+    if (structureChanged && this.projectId) {
+      try {
+        await rebuildProjectStructure(this.projectId);
+      } catch (error) {
+        console.error('Failed to refresh project structure after link mutation', error);
+      }
+    }
   }
 
   async processNode(node, { keepalive = false } = {}) {
@@ -215,7 +227,7 @@ export default class AutosaveManager {
   async processLink(entry, { keepalive = false } = {}) {
     const { action, from, to, type = 'LINKS_TO', props = {} } = entry;
     if (!from || !to || !action) {
-      return;
+      return false;
     }
     if (action === 'create') {
       await createEdge(
@@ -227,7 +239,9 @@ export default class AutosaveManager {
         },
         { projectId: this.projectId, keepalive }
       );
-    } else if (action === 'delete') {
+      return true;
+    }
+    if (action === 'delete') {
       await deleteEdge(
         {
           from,
@@ -236,7 +250,9 @@ export default class AutosaveManager {
         },
         { projectId: this.projectId, keepalive }
       );
-    } else if (action === 'update') {
+      return true;
+    }
+    if (action === 'update') {
       await updateEdge(
         {
           from,
@@ -247,6 +263,7 @@ export default class AutosaveManager {
         { projectId: this.projectId, keepalive }
       );
     }
+    return false;
   }
 
   flush(options = {}) {
