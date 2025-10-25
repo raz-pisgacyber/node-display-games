@@ -147,6 +147,157 @@ function ensureObject(value) {
   return value;
 }
 
+function sanitiseCustomFields(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((field) => {
+      if (!field || typeof field !== 'object') {
+        return null;
+      }
+      const key = typeof field.key === 'string' ? field.key.trim() : '';
+      const value = typeof field.value === 'string' ? field.value : '';
+      if (!key && !value) {
+        return null;
+      }
+      return { key, value };
+    })
+    .filter(Boolean);
+}
+
+function sanitiseLinkedElements(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const id = typeof entry.id === 'string' ? entry.id : entry.id?.toString?.();
+      if (!id) {
+        return null;
+      }
+      return {
+        id,
+        label:
+          typeof entry.label === 'string' && entry.label
+            ? entry.label
+            : id,
+        type: typeof entry.type === 'string' ? entry.type : '',
+      };
+    })
+    .filter(Boolean);
+}
+
+function sanitiseStructureNode(node) {
+  if (!node || typeof node !== 'object') {
+    return null;
+  }
+  const id = typeof node.id === 'string' ? node.id : node.id?.toString?.();
+  if (!id) {
+    return null;
+  }
+  const label =
+    typeof node.label === 'string' ? node.label : node.title?.toString?.() || '';
+  const type =
+    typeof node.type === 'string'
+      ? node.type
+      : typeof node.builder === 'string'
+      ? node.builder
+      : '';
+  return { id, label, type };
+}
+
+function sanitiseStructureEdge(edge) {
+  if (!edge || typeof edge !== 'object') {
+    return null;
+  }
+  const from =
+    typeof edge.from === 'string' ? edge.from : edge.from?.toString?.();
+  const to = typeof edge.to === 'string' ? edge.to : edge.to?.toString?.();
+  if (!from || !to) {
+    return null;
+  }
+  return {
+    from,
+    to,
+    type: typeof edge.type === 'string' ? edge.type : 'LINKS_TO',
+  };
+}
+
+function sanitiseStructure(structure) {
+  if (!structure || typeof structure !== 'object') {
+    return { nodes: [], edges: [] };
+  }
+  const nodes = Array.isArray(structure.nodes)
+    ? structure.nodes.map(sanitiseStructureNode).filter(Boolean)
+    : [];
+  const edges = Array.isArray(structure.edges)
+    ? structure.edges.map(sanitiseStructureEdge).filter(Boolean)
+    : [];
+  return { nodes, edges };
+}
+
+function sanitiseMeta(meta = {}, fallbacks = {}) {
+  const source = meta && typeof meta === 'object' ? meta : {};
+  const result = {};
+  const noteCandidates = [
+    source.notes,
+    fallbacks.notes,
+    source.projectData?.notes,
+    source.elementData?.notes,
+  ];
+  const note = noteCandidates.find((value) => typeof value === 'string' && value.trim());
+  if (note) {
+    result.notes = note;
+  }
+  const customFieldsSource =
+    source.customFields ||
+    fallbacks.customFields ||
+    source.projectData?.customFields ||
+    source.elementData?.customFields ||
+    [];
+  const customFields = sanitiseCustomFields(customFieldsSource);
+  if (customFields.length) {
+    result.customFields = customFields;
+  }
+  const linkedSource = source.linked_elements || fallbacks.linked_elements || [];
+  const linkedElements = sanitiseLinkedElements(linkedSource);
+  if (linkedElements.length) {
+    result.linked_elements = linkedElements;
+  }
+  return result;
+}
+
+function sanitiseNodeContext(context) {
+  if (!context || typeof context !== 'object') {
+    return {};
+  }
+  const id = typeof context.id === 'string' ? context.id : context.node_id?.toString?.() || '';
+  const label =
+    typeof context.label === 'string'
+      ? context.label
+      : context.title?.toString?.() || '';
+  const type =
+    typeof context.type === 'string'
+      ? context.type
+      : typeof context.builder === 'string'
+      ? context.builder
+      : '';
+  return {
+    id,
+    label,
+    type,
+    meta: sanitiseMeta(context.meta, {
+      notes: context.notes,
+      customFields: context.customFields,
+      linked_elements: context.linked_elements,
+    }),
+  };
+}
+
 function normaliseMemory(memory) {
   const base = ensureObject(memory);
   const session = ensureObject(base.session);
@@ -159,8 +310,8 @@ function normaliseMemory(memory) {
       active_node_id: typeof session.active_node_id === 'string' ? session.active_node_id : '',
       timestamp: typeof session.timestamp === 'string' ? session.timestamp : new Date().toISOString(),
     },
-    project_structure: ensureObject(base.project_structure),
-    node_context: ensureObject(base.node_context),
+    project_structure: sanitiseStructure(base.project_structure),
+    node_context: sanitiseNodeContext(base.node_context),
     fetched_context: ensureObject(base.fetched_context),
     working_history: typeof base.working_history === 'string' ? base.working_history : '',
     messages,
@@ -231,10 +382,10 @@ function mergeWorkingMemory(base, updates) {
     };
   }
   if (incoming.project_structure !== undefined) {
-    next.project_structure = ensureObject(incoming.project_structure);
+    next.project_structure = sanitiseStructure(incoming.project_structure);
   }
   if (incoming.node_context !== undefined) {
-    next.node_context = ensureObject(incoming.node_context);
+    next.node_context = sanitiseNodeContext(incoming.node_context);
   }
   if (incoming.fetched_context !== undefined) {
     next.fetched_context = ensureObject(incoming.fetched_context);

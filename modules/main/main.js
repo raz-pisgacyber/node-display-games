@@ -227,20 +227,84 @@ function cloneForMemory(value) {
   }
 }
 
+function sanitiseCustomFields(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((field) => {
+      if (!field || typeof field !== 'object') {
+        return null;
+      }
+      const key = typeof field.key === 'string' ? field.key.trim() : '';
+      const value = typeof field.value === 'string' ? field.value : '';
+      if (!key && !value) {
+        return null;
+      }
+      return { key, value };
+    })
+    .filter(Boolean);
+}
+
+function sanitiseLinkedElements(list = []) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map((item) => {
+      if (!item || typeof item !== 'object' || !item.id) {
+        return null;
+      }
+      return {
+        id: String(item.id),
+        label: typeof item.label === 'string' && item.label ? item.label : String(item.id),
+        type: typeof item.type === 'string' && item.type ? item.type : '',
+      };
+    })
+    .filter(Boolean);
+}
+
+function deriveNodeTypeForMemory(node = {}) {
+  const meta = node.meta || {};
+  if (typeof meta.elementType === 'string' && meta.elementType.trim()) {
+    return meta.elementType.trim();
+  }
+  if (typeof node.type === 'string' && node.type.trim()) {
+    return node.type.trim();
+  }
+  if (typeof meta.builder === 'string' && meta.builder.trim()) {
+    return meta.builder.trim();
+  }
+  return 'project';
+}
+
 function buildWorkingMemoryMeta(meta = {}, extras = {}) {
   const source = meta && typeof meta === 'object' ? meta : {};
   const result = {};
-  const builder = source.builder ?? extras.builder;
-  if (builder) {
-    result.builder = builder;
+  const noteCandidates = [
+    extras.notes,
+    source.notes,
+    source.projectData?.notes,
+    source.elementData?.notes,
+  ];
+  const note = noteCandidates.find((value) => typeof value === 'string' && value.trim());
+  if (note) {
+    result.notes = note;
   }
-  const notes = extras.notes ?? source.notes;
-  if (typeof notes === 'string' && notes.trim()) {
-    result.notes = notes;
+  const customFieldsSource =
+    extras.customFields ||
+    source.customFields ||
+    source.projectData?.customFields ||
+    source.elementData?.customFields ||
+    [];
+  const customFields = sanitiseCustomFields(customFieldsSource);
+  if (customFields.length) {
+    result.customFields = cloneForMemory(customFields);
   }
-  const projectData = source.projectData ?? extras.projectData;
-  if (projectData && typeof projectData === 'object') {
-    result.projectData = cloneForMemory(projectData);
+  const linkedSource = extras.linked_elements || source.linked_elements || [];
+  const linkedElements = sanitiseLinkedElements(linkedSource);
+  if (linkedElements.length) {
+    result.linked_elements = cloneForMemory(linkedElements);
   }
   return result;
 }
@@ -252,11 +316,7 @@ function buildProjectStructurePayload() {
   const nodes = state.graphNodes.map((node) => ({
     id: String(node.id),
     label: node.label || '',
-    meta: buildWorkingMemoryMeta(node.meta || {}, {
-      notes: node.meta?.notes ?? node.notes,
-      projectData: node.meta?.projectData ?? node.projectData,
-      builder: node.meta?.builder,
-    }),
+    type: deriveNodeTypeForMemory(node),
   }));
   const edges = state.graphEdges.map((edge) => ({
     from: String(edge.from),
@@ -281,10 +341,15 @@ function buildNodeContextPayload() {
   const context = {
     id: state.draftNode.id,
     label: state.draftNode.label || '',
+    type: deriveNodeTypeForMemory(state.draftNode),
     meta: buildWorkingMemoryMeta(state.draftNode.meta || {}, {
       notes: state.draftNode.notes ?? state.draftNode.meta?.notes,
-      projectData: state.draftNode.meta?.projectData,
-      builder: state.draftNode.meta?.builder,
+      customFields:
+        state.draftNode.meta?.projectData?.customFields ||
+        state.draftNode.meta?.elementData?.customFields ||
+        state.draftNode.projectData?.customFields ||
+        [],
+      linked_elements: state.draftNode.meta?.linked_elements || [],
     }),
   };
   return context;
@@ -327,7 +392,7 @@ function syncWorkingMemoryWorkingHistory() {
 
 function resetWorkingMemoryForProject(projectId) {
   initialiseWorkingMemory({ projectId });
-  setWorkingMemoryProjectStructure({ project_id: projectId || '', nodes: [], edges: [] });
+  setWorkingMemoryProjectStructure({ nodes: [], edges: [] });
   setWorkingMemoryNodeContext({});
   setWorkingMemoryMessages([]);
   setWorkingMemoryWorkingHistory('');
