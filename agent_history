@@ -169,3 +169,10 @@
   - Refreshed browser-side sanitisation, defaults, and node-scoped exports to support the new `project_graph`/`elements_graph` schema while keeping viewer behaviour intact.
   - Updated project and element builders to tag working-memory nodes with their originating builders for consistent downstream processing.
 - Verification: Not run (no automated test suite provided).
+## 2025-11-04 12:00 UTC
+- Files modified: `mcp/index.js`, `src/db/mysql.js`, `agent_history`.
+- Completed tasks:
+  - Removed the server-side working-memory merge tool, added `sendMessage`/`updateWorkingHistory` MCP actions, and ensured calls persist chat entries and node summaries directly to SQL.
+  - Extended the MySQL schema with a `message_type` column plus a `node_working_history` table so transcripts and working history can be stored deterministically.
+  - Simplified `/mcp/working-memory` to return `null`, signalling that the browser maintains the snapshot while MCP responses remain stateless.
+- Verification: Not run (infrastructure-only changes).

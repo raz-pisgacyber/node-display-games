@@ -34,10 +34,18 @@ const SCHEMA_STATEMENTS = [
     session_id BIGINT NOT NULL,
     node_id VARCHAR(64) NULL,
     role VARCHAR(32) NOT NULL,
+    message_type VARCHAR(32) NOT NULL DEFAULT 'user_reply',
     content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_messages_session (session_id),
     CONSTRAINT fk_messages_session FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS node_working_history (
+    project_id VARCHAR(64) NOT NULL,
+    node_id VARCHAR(64) NOT NULL,
+    working_history TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, node_id)
   )`,
   `CREATE TABLE IF NOT EXISTS summaries (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -78,6 +86,17 @@ async function ensureSchema(connection) {
     primaryKey.some((row) => row.Column_name === 'node_id');
   if (!hasProjectComposite) {
     await queryWithLogging(connection, 'ALTER TABLE node_versions DROP PRIMARY KEY, ADD PRIMARY KEY (project_id, node_id)');
+  }
+
+  const [messageTypeColumn] = await queryWithLogging(
+    connection,
+    "SHOW COLUMNS FROM messages LIKE 'message_type'"
+  );
+  if (messageTypeColumn.length === 0) {
+    await queryWithLogging(
+      connection,
+      "ALTER TABLE messages ADD COLUMN message_type VARCHAR(32) NOT NULL DEFAULT 'user_reply' AFTER role"
+    );
   }
 }
 

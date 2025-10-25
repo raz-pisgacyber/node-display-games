@@ -11,10 +11,7 @@ const { getWriteSession } = require('../src/db/neo4j');
 const { pool } = require('../src/db/mysql');
 const { upsertNodeVersion, deleteNodeVersion } = require('../src/utils/nodeVersions');
 const config = require('../src/config');
-const {
-  getWorkingMemorySnapshot,
-  setWorkingMemorySnapshot,
-} = require('../src/state/workingMemoryStore');
+const { executeWithLogging } = require('../src/utils/mysqlLogger');
 
 const router = express.Router();
 
@@ -107,15 +104,39 @@ const toolSchemas = [
     },
   },
   {
-    name: 'updateWorkingMemory',
-    description: 'Merge updated working memory JSON into the active snapshot.',
+    name: 'sendMessage',
+    description: 'Persist a transcript entry for the active session.',
     input_schema: {
       type: 'object',
-      required: ['memory_json'],
+      required: ['message_type', 'content'],
       properties: {
-        memory_json: {
-          type: 'object',
-          description: 'Partial or full working memory structure produced by the AI.',
+        message_type: {
+          type: 'string',
+          description: 'Classify the message intent.',
+          enum: ['user_reply', 'inner_process'],
+        },
+        content: {
+          type: 'string',
+          description: 'Plain-text message content to store.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'updateWorkingHistory',
+    description: 'Persist a working-history summary for a specific node.',
+    input_schema: {
+      type: 'object',
+      required: ['node_id', 'summary_text'],
+      properties: {
+        node_id: {
+          type: 'string',
+          description: 'Identifier of the node whose working history should be updated.',
+        },
+        summary_text: {
+          type: 'string',
+          description: 'Updated working-history narrative for the node.',
         },
       },
       additionalProperties: false,
@@ -143,6 +164,13 @@ class ToolError extends Error {
     this.status = status;
   }
 }
+
+const MESSAGE_TYPE_ROLE_MAP = {
+  user_reply: 'user',
+  inner_process: 'reflector',
+};
+
+const VALID_MESSAGE_TYPES = new Set(Object.keys(MESSAGE_TYPE_ROLE_MAP));
 
 function ensureObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -670,82 +698,6 @@ function clamp(value, min, max) {
   return upper;
 }
 
-function mergeWorkingMemory(base, updates) {
-  const incoming = ensureObject(updates);
-  const next = normaliseMemory(base);
-  if (incoming.session) {
-    next.session = {
-      ...next.session,
-      ...ensureObject(incoming.session),
-    };
-  }
-  if (incoming.project_structure !== undefined) {
-    next.project_structure = sanitiseStructure(incoming.project_structure);
-  }
-  if (incoming.node_context !== undefined) {
-    next.node_context = sanitiseNodeContext(incoming.node_context);
-  }
-  if (incoming.fetched_context !== undefined) {
-    next.fetched_context = ensureObject(incoming.fetched_context);
-  }
-  if (incoming.working_history !== undefined) {
-    next.working_history =
-      typeof incoming.working_history === 'string'
-        ? incoming.working_history
-        : next.working_history;
-  }
-  if (incoming.messages !== undefined) {
-    next.messages = Array.isArray(incoming.messages)
-      ? [...incoming.messages]
-      : next.messages;
-  }
-  if (incoming.last_user_message !== undefined) {
-    next.last_user_message =
-      typeof incoming.last_user_message === 'string'
-        ? incoming.last_user_message
-        : next.last_user_message;
-  } else if (incoming.messages !== undefined) {
-    next.last_user_message = deriveLastUserMessage(next.messages);
-  }
-  if (incoming.config) {
-    const configUpdate = ensureObject(incoming.config);
-    next.config = {
-      ...next.config,
-      history_length:
-        configUpdate.history_length !== undefined
-          ? normaliseNumber(
-              configUpdate.history_length,
-              next.config.history_length,
-              1,
-              200
-            )
-          : next.config.history_length,
-      include_project_structure:
-        configUpdate.include_project_structure !== undefined
-          ? Boolean(configUpdate.include_project_structure)
-          : next.config.include_project_structure,
-      include_context:
-        configUpdate.include_context !== undefined
-          ? Boolean(configUpdate.include_context)
-          : next.config.include_context,
-      include_working_history:
-        configUpdate.include_working_history !== undefined
-          ? Boolean(configUpdate.include_working_history)
-          : next.config.include_working_history,
-      auto_refresh_interval:
-        configUpdate.auto_refresh_interval !== undefined
-          ? normaliseNumber(
-              configUpdate.auto_refresh_interval,
-              next.config.auto_refresh_interval,
-              0,
-              600
-            )
-          : next.config.auto_refresh_interval,
-    };
-  }
-  return next;
-}
-
 function resolveProjectId(memory) {
   const normalised = normaliseMemory(memory);
   return normalised.session.project_id || config.defaults.projectId;
@@ -965,8 +917,7 @@ async function runUnlinkNodes(args, memory) {
 }
 
 async function runGetWorkingMemory(memory) {
-  const snapshot = getWorkingMemorySnapshot();
-  const baseMemory = snapshot ? { ...snapshot } : normaliseMemory(memory);
+  const baseMemory = normaliseMemory(memory);
   const includeStructure =
     baseMemory?.config?.include_project_structure !== false;
   const projectId = resolveProjectId(baseMemory);
@@ -977,26 +928,103 @@ async function runGetWorkingMemory(memory) {
     ...baseMemory,
     project_structure: projectStructure,
   };
-  setWorkingMemorySnapshot(nextMemory);
   return { memory: nextMemory, __skipNormalise: true };
 }
 
-async function runUpdateWorkingMemory(args, memory) {
-  const { memory_json: memoryJson } = ensureObject(args);
-  if (!memoryJson || typeof memoryJson !== 'object') {
-    throw new ToolError('memory_json must be an object');
+async function runSendMessage(args, memory) {
+  const { message_type: messageTypeRaw, content } = ensureObject(args);
+  const messageType =
+    typeof messageTypeRaw === 'string' ? messageTypeRaw.trim() : '';
+  if (!VALID_MESSAGE_TYPES.has(messageType)) {
+    throw new ToolError('message_type must be either user_reply or inner_process');
   }
-  const baseMemory = getWorkingMemorySnapshot() || memory;
-  const nextMemory = mergeWorkingMemory(baseMemory, memoryJson);
-  const includeStructure =
-    nextMemory?.config?.include_project_structure !== false;
-  const projectId = resolveProjectId(nextMemory);
-  const projectStructure = includeStructure
-    ? await loadProjectStructure(projectId)
-    : sanitiseStructure({});
-  nextMemory.project_structure = projectStructure;
-  setWorkingMemorySnapshot(nextMemory);
-  return { memory: nextMemory, __skipNormalise: true };
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new ToolError('content must be a non-empty string');
+  }
+  const baseMemory = normaliseMemory(memory);
+  const sessionIdRaw = baseMemory.session.session_id;
+  const sessionId =
+    typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
+  if (!sessionId) {
+    throw new ToolError('session_id is required in working memory');
+  }
+  const nodeIdSource =
+    baseMemory.session.active_node_id || baseMemory.node_context?.id || '';
+  const nodeIdTrimmed =
+    typeof nodeIdSource === 'string' ? nodeIdSource.trim() : '';
+  const nodeId = nodeIdTrimmed ? nodeIdTrimmed : null;
+  const trimmedContent = content.trim();
+  const role = MESSAGE_TYPE_ROLE_MAP[messageType] || 'user';
+  const [result] = await executeWithLogging(
+    pool,
+    'INSERT INTO messages (session_id, node_id, role, content, message_type) VALUES (?, ?, ?, ?, ?)',
+    [sessionId, nodeId, role, trimmedContent, messageType]
+  );
+  const insertedId = result?.insertId;
+  let savedMessage = null;
+  if (insertedId) {
+    const [rows] = await executeWithLogging(
+      pool,
+      'SELECT id, session_id, node_id, role, content, message_type, created_at FROM messages WHERE id = ?',
+      [insertedId]
+    );
+    savedMessage = Array.isArray(rows) && rows.length ? rows[0] : null;
+  }
+  const createdAt = savedMessage?.created_at
+    ? savedMessage.created_at.toISOString?.() || savedMessage.created_at
+    : new Date().toISOString();
+  const messagePayload = {
+    id: savedMessage?.id ?? insertedId ?? null,
+    session_id: savedMessage?.session_id ?? sessionId,
+    node_id: savedMessage?.node_id ?? nodeId,
+    role: savedMessage?.role ?? role,
+    content: savedMessage?.content ?? trimmedContent,
+    message_type: savedMessage?.message_type ?? messageType,
+    created_at: createdAt,
+  };
+  return { memory: baseMemory, message: messagePayload };
+}
+
+async function runUpdateWorkingHistory(args, memory) {
+  const { node_id: nodeIdRaw, summary_text: summaryText } = ensureObject(args);
+  const nodeId =
+    typeof nodeIdRaw === 'string' ? nodeIdRaw.trim() : '';
+  if (!nodeId) {
+    throw new ToolError('node_id is required');
+  }
+  if (typeof summaryText !== 'string') {
+    throw new ToolError('summary_text must be a string');
+  }
+  const baseMemory = normaliseMemory(memory);
+  const projectIdRaw = resolveProjectId(baseMemory);
+  const projectId =
+    typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  if (!projectId) {
+    throw new ToolError('project_id is required to update working history');
+  }
+  await executeWithLogging(
+    pool,
+    `INSERT INTO node_working_history (project_id, node_id, working_history)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE working_history = VALUES(working_history), updated_at = CURRENT_TIMESTAMP`,
+    [projectId, nodeId, summaryText]
+  );
+  const [rows] = await executeWithLogging(
+    pool,
+    'SELECT project_id, node_id, working_history, updated_at FROM node_working_history WHERE project_id = ? AND node_id = ?',
+    [projectId, nodeId]
+  );
+  const record = Array.isArray(rows) && rows.length ? rows[0] : null;
+  const updatedAt = record?.updated_at
+    ? record.updated_at.toISOString?.() || record.updated_at
+    : new Date().toISOString();
+  const historyPayload = {
+    project_id: record?.project_id ?? projectId,
+    node_id: record?.node_id ?? nodeId,
+    working_history: record?.working_history ?? summaryText,
+    updated_at: updatedAt,
+  };
+  return { memory: baseMemory, history: historyPayload };
 }
 
 function runUpdateThought(args, memory) {
@@ -1021,7 +1049,8 @@ const toolHandlers = {
   linkNodes: runLinkNodes,
   unlinkNodes: runUnlinkNodes,
   getWorkingMemory: async (_, memory) => runGetWorkingMemory(memory),
-  updateWorkingMemory: async (args, memory) => runUpdateWorkingMemory(args, memory),
+  sendMessage: async (args, memory) => runSendMessage(args, memory),
+  updateWorkingHistory: async (args, memory) => runUpdateWorkingHistory(args, memory),
   updateThought: async (args, memory) => runUpdateThought(args, memory),
 };
 
@@ -1029,28 +1058,8 @@ router.get('/tools', (req, res) => {
   res.json({ tools: toolSchemas });
 });
 
-router.get('/working-memory', async (req, res, next) => {
-  try {
-    const snapshot = getWorkingMemorySnapshot();
-    if (!snapshot) {
-      res.json(null);
-      return;
-    }
-    const includeStructure =
-      snapshot?.config?.include_project_structure !== false;
-    const projectId = resolveProjectId(snapshot);
-    const projectStructure = includeStructure
-      ? await loadProjectStructure(projectId)
-      : sanitiseStructure({});
-    const nextMemory = {
-      ...snapshot,
-      project_structure: projectStructure,
-    };
-    setWorkingMemorySnapshot(nextMemory);
-    res.json(nextMemory);
-  } catch (error) {
-    next(error);
-  }
+router.get('/working-memory', (req, res) => {
+  res.json(null);
 });
 
 router.post('/call', async (req, res, next) => {
