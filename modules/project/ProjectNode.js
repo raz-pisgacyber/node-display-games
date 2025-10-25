@@ -1,6 +1,7 @@
 import NodeBase from '../../core/nodebase.js';
 import { randomColor } from '../../core/util.js';
 import { fetchLinks, createLink, deleteLink } from '../common/api.js';
+import { rebuildProjectStructure } from '../common/projectStructureService.js';
 
 const ensurePanelHost = () => {
   if (!NodeBase.panelHost) {
@@ -558,6 +559,11 @@ class ProjectNode extends NodeBase {
       );
       ui.select.value = '';
       await this.refreshLinkedElements();
+      try {
+        await rebuildProjectStructure(this.projectId);
+      } catch (error) {
+        console.warn('Failed to refresh project structure after creating link', error);
+      }
     } catch (error) {
       console.error('Failed to link element', error);
       state.error = 'Failed to add element link.';
@@ -583,6 +589,11 @@ class ProjectNode extends NodeBase {
         { projectId: this.projectId }
       );
       await this.refreshLinkedElements();
+      try {
+        await rebuildProjectStructure(this.projectId);
+      } catch (error) {
+        console.warn('Failed to refresh project structure after removing link', error);
+      }
     } catch (error) {
       console.error('Failed to remove element link', error);
       state.error = 'Failed to remove element link.';

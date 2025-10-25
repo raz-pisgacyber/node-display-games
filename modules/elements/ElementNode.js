@@ -1,6 +1,7 @@
 import NodeBase from '../../core/nodebase.js';
 import util from '../../core/util.js';
 import { fetchLinks, createLink, deleteLink } from '../common/api.js';
+import { rebuildProjectStructure } from '../common/projectStructureService.js';
 
 const ensurePanelHost = () => {
   if (!NodeBase.panelHost) {
@@ -818,6 +819,11 @@ class ElementNode extends NodeBase {
       );
       ui.select.value = '';
       await this.refreshLinkedProjects();
+      try {
+        await rebuildProjectStructure(this.projectId);
+      } catch (error) {
+        console.warn('Failed to refresh project structure after linking project node', error);
+      }
     } catch (error) {
       console.error('Failed to link project node', error);
       state.error = 'Failed to add scene link.';
@@ -843,6 +849,11 @@ class ElementNode extends NodeBase {
         { projectId: this.projectId }
       );
       await this.refreshLinkedProjects();
+      try {
+        await rebuildProjectStructure(this.projectId);
+      } catch (error) {
+        console.warn('Failed to refresh project structure after unlinking project node', error);
+      }
     } catch (error) {
       console.error('Failed to remove project link', error);
       state.error = 'Failed to remove scene link.';

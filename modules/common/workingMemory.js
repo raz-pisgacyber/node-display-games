@@ -305,48 +305,12 @@ function sanitiseGraphNode(node) {
   if (!id) {
     return null;
   }
-  const builder = safeString(node.builder || node.type || '');
-  const payload = {
+  return {
     id,
     label: safeString(node.label ?? node.title ?? ''),
     type: safeString(node.type ?? ''),
-    builder,
+    builder: safeString(node.builder || node.type || ''),
   };
-  const children = Array.isArray(node.children)
-    ? Array.from(
-        new Set(
-          node.children
-            .map((child) => safeString(child))
-            .filter((value) => Boolean(value))
-        )
-      )
-    : [];
-  if (builder.toLowerCase() === 'project') {
-    payload.children = children;
-  } else if (children.length) {
-    payload.children = children;
-  }
-  const links = Array.isArray(node.links)
-    ? node.links
-        .map((link) => {
-          if (!link || typeof link !== 'object') {
-            return null;
-          }
-          const to = safeString(link.to);
-          if (!to) {
-            return null;
-          }
-          return {
-            to,
-            type: safeString(link.type || 'LINKS_TO'),
-          };
-        })
-        .filter(Boolean)
-    : [];
-  if (links.length) {
-    payload.links = links;
-  }
-  return payload;
 }
 
 function sanitiseGraphEdge(edge) {

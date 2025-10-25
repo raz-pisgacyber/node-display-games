@@ -6,11 +6,14 @@ import AutosaveManager from '../common/autosaveManager.js';
 import { fetchGraph, createNode, createCheckpoint } from '../common/api.js';
 import {
   initialiseWorkingMemory,
-  setWorkingMemoryProjectStructure,
   setWorkingMemoryNodeContext,
   setWorkingMemorySession,
 } from '../common/workingMemory.js';
 import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
+import {
+  rebuildProjectStructure,
+  syncProjectStructureToWorkingMemory,
+} from '../common/projectStructureService.js';
 
 const PROJECT_STORAGE_KEY = 'story-graph-project';
 const PROJECT_CONTEXT_STORAGE_KEY = 'story-graph-project-context';
@@ -129,53 +132,6 @@ function buildNodeContextFromInstance(node) {
     }),
   };
   return context;
-}
-
-function buildElementsStructure(projectId, linkManager) {
-  const payloadNodes = [];
-  if (NodeBase?.instances instanceof Map) {
-    NodeBase.instances.forEach((instance) => {
-      if (!instance) {
-        return;
-      }
-      const builderType = (instance.meta?.builder || '').toLowerCase();
-      if (builderType && builderType !== 'elements') {
-        return;
-      }
-      if (projectId && instance.projectId && instance.projectId !== projectId) {
-        return;
-      }
-      payloadNodes.push({
-        id: String(instance.id),
-        label: instance.title || '',
-        type: instance.type || instance.meta?.elementType || 'element',
-        builder: 'elements',
-      });
-    });
-  }
-  const payloadEdges = [];
-  if (linkManager?.links instanceof Map) {
-    linkManager.links.forEach((link) => {
-      if (!link?.nodeA?.id || !link?.nodeB?.id) {
-        return;
-      }
-      payloadEdges.push({
-        from: String(link.nodeA.id),
-        to: String(link.nodeB.id),
-        type: 'LINKS_TO',
-      });
-    });
-  }
-  return { nodes: payloadNodes, edges: payloadEdges };
-}
-
-function syncWorkingMemoryStructure(projectId, linkManager) {
-  if (projectId) {
-    setWorkingMemorySession({ project_id: projectId });
-  }
-  setWorkingMemoryProjectStructure({
-    elements_graph: buildElementsStructure(projectId, linkManager),
-  });
 }
 
 function syncWorkingMemoryNode(node, projectId) {
@@ -334,7 +290,6 @@ function handleNodeMutated(event) {
   }
   state.autosave?.markNodeDirty(node, reason);
   syncWorkingMemoryNode(node, state.projectId);
-  syncWorkingMemoryStructure(state.projectId, state.linkManager);
 }
 
 function handleLinkMutated(event) {
@@ -354,7 +309,6 @@ function handleLinkMutated(event) {
     type: detail.type || 'LINKS_TO',
     props,
   });
-  syncWorkingMemoryStructure(state.projectId, state.linkManager);
 }
 
 function attachNavigationGuard() {
@@ -675,7 +629,11 @@ const init = async (projectId) => {
         node.meta = created.meta;
       }
       nodesById.set(node.id, node);
-      syncWorkingMemoryStructure(projectId, linkManager);
+      try {
+        await rebuildProjectStructure(projectId);
+      } catch (error) {
+        console.warn('Failed to refresh project structure after creating element', error);
+      }
       syncWorkingMemoryNode(node, projectId);
       return node;
     } catch (error) {
@@ -718,9 +676,13 @@ const init = async (projectId) => {
 
   const workingMemoryButton = document.querySelector('[data-action="working-memory"]');
   if (workingMemoryButton) {
-    workingMemoryButton.addEventListener('click', () => {
+    workingMemoryButton.addEventListener('click', async () => {
       const lastNode = NodeBase.getLastInteractedNode?.();
-      syncWorkingMemoryStructure(state.projectId, state.linkManager);
+      try {
+        await syncProjectStructureToWorkingMemory(state.projectId, { force: true });
+      } catch (error) {
+        console.warn('Failed to refresh project structure for working memory view', error);
+      }
       if (lastNode && (!state.projectId || lastNode.projectId === state.projectId)) {
         syncWorkingMemoryNode(lastNode, state.projectId);
       }
@@ -795,9 +757,6 @@ const init = async (projectId) => {
 
     const processedLinks = new Set();
     edges.forEach((edge) => {
-      if ((edge.props?.context || '').toLowerCase() !== 'elements') {
-        return;
-      }
       const fromNode = nodesById.get(edge.from);
       const toNode = nodesById.get(edge.to);
       if (!fromNode || !toNode) {
@@ -829,7 +788,11 @@ const init = async (projectId) => {
 
   util.log('Elements builder initialised.');
 
-  syncWorkingMemoryStructure(state.projectId, linkManager);
+  try {
+    await syncProjectStructureToWorkingMemory(state.projectId, { force: true });
+  } catch (error) {
+    console.warn('Failed to load project structure into working memory', error);
+  }
 
   window.builder = {
     util,

@@ -236,49 +236,12 @@ function sanitiseGraphNode(node) {
   const type = typeof node.type === 'string' ? node.type : '';
   const builder =
     typeof node.builder === 'string' ? node.builder : type || '';
-  const normalisedChildren = Array.isArray(node.children)
-    ? Array.from(
-        new Set(
-          node.children
-            .map((child) =>
-              typeof child === 'string' ? child : child?.toString?.()
-            )
-            .filter(Boolean)
-        )
-      )
-    : [];
-  const links = Array.isArray(node.links)
-    ? node.links
-        .map((link) => {
-          if (!link || typeof link !== 'object') {
-            return null;
-          }
-          const target =
-            typeof link.to === 'string' ? link.to : link.to?.toString?.();
-          if (!target) {
-            return null;
-          }
-          const linkType =
-            typeof link.type === 'string' ? link.type : 'LINKS_TO';
-          return { to: target, type: linkType };
-        })
-        .filter(Boolean)
-    : [];
-  const payload = {
+  return {
     id,
     label,
     type,
     builder,
   };
-  if (builder.trim().toLowerCase() === 'project') {
-    payload.children = normalisedChildren;
-  } else if (normalisedChildren.length) {
-    payload.children = normalisedChildren;
-  }
-  if (links.length) {
-    payload.links = links;
-  }
-  return payload;
 }
 
 function sanitiseGraphEdge(edge) {
@@ -918,17 +881,7 @@ async function runUnlinkNodes(args, memory) {
 
 async function runGetWorkingMemory(memory) {
   const baseMemory = normaliseMemory(memory);
-  const includeStructure =
-    baseMemory?.config?.include_project_structure !== false;
-  const projectId = resolveProjectId(baseMemory);
-  const projectStructure = includeStructure
-    ? await loadProjectStructure(projectId)
-    : sanitiseStructure({});
-  const nextMemory = {
-    ...baseMemory,
-    project_structure: projectStructure,
-  };
-  return { memory: nextMemory, __skipNormalise: true };
+  return { memory: baseMemory, __skipNormalise: true };
 }
 
 async function runSendMessage(args, memory) {
