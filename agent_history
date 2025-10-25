@@ -176,3 +176,10 @@
   - Extended the MySQL schema with a `message_type` column plus a `node_working_history` table so transcripts and working history can be stored deterministically.
   - Simplified `/mcp/working-memory` to return `null`, signalling that the browser maintains the snapshot while MCP responses remain stateless.
 - Verification: Not run (infrastructure-only changes).
+
+## 2025-11-05 10:30 UTC
+- Files modified: `mcp/index.js`, `agent_history`.
+- Completed tasks:
+  - Required explicit role values in the `sendMessage` MCP tool schema so orchestration layers can tag transcripts with their originating agent roles.
+  - Updated `runSendMessage` to validate and persist provided roles instead of inferring them from message types while keeping message type validation unchanged.
+- Verification: Not run (no automated test suite available).
