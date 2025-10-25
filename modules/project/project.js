@@ -179,7 +179,9 @@ function syncWorkingMemoryStructure(projectId) {
   if (projectId) {
     setWorkingMemorySession({ project_id: projectId });
   }
-  setWorkingMemoryProjectStructure(buildProjectStructureSnapshot(projectId));
+  setWorkingMemoryProjectStructure({
+    project_graph: buildProjectStructureSnapshot(projectId),
+  });
 }
 
 function syncWorkingMemoryNode(node, projectId) {

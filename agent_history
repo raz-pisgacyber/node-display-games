@@ -183,3 +183,11 @@
   - Required explicit role values in the `sendMessage` MCP tool schema so orchestration layers can tag transcripts with their originating agent roles.
   - Updated `runSendMessage` to validate and persist provided roles instead of inferring them from message types while keeping message type validation unchanged.
 - Verification: Not run (no automated test suite available).
+
+## 2025-11-06 14:00 UTC
+- Files modified: `modules/common/workingMemory.js`, `modules/common/projectStructure.js`, `modules/main/main.js`, `modules/project/project.js`, `modules/elements/elements.js`, `agent_history`.
+- Completed tasks:
+  - Added deterministic graph comparison and merge logic to working-memory updates so project and element structures persist across builder interactions without being overwritten.
+  - Introduced a shared project-structure builder that assembles full project and element graphs from Neo4j payloads and wired the main hub to emit unified `project_graph`/`elements_graph` snapshots.
+  - Updated project and element builders to send scoped updates that augment the shared structure instead of replacing it, preventing node navigation from dropping unrelated graph data.
+- Verification: Not run (no automated test suite available).
