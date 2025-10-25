@@ -64,6 +64,16 @@ const SCHEMA_STATEMENTS = [
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_checkpoints_project (project_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS working_memory_parts (
+    session_id VARCHAR(64) NOT NULL,
+    project_id VARCHAR(64) NOT NULL,
+    part VARCHAR(32) NOT NULL,
+    payload JSON NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (session_id, part),
+    INDEX idx_working_memory_parts_project (project_id),
+    INDEX idx_working_memory_parts_part (part)
+  )`,
 ];
 
 async function ensureSchema(connection) {

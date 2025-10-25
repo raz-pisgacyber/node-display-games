@@ -12,6 +12,14 @@ const { pool } = require('../src/db/mysql');
 const { upsertNodeVersion, deleteNodeVersion } = require('../src/utils/nodeVersions');
 const config = require('../src/config');
 const { executeWithLogging } = require('../src/utils/mysqlLogger');
+const {
+  loadWorkingMemory,
+  saveWorkingMemoryPart,
+} = require('../src/utils/workingMemoryStore');
+const {
+  normaliseWorkingMemory,
+  deriveLastUserMessage: deriveLastUserMessageSchema,
+} = require('../src/utils/workingMemorySchema');
 
 const router = express.Router();
 
@@ -588,77 +596,11 @@ function sanitiseNodeContext(context) {
 }
 
 function normaliseMemory(memory) {
-  const base = ensureObject(memory);
-  const session = ensureObject(base.session);
-  const messages = Array.isArray(base.messages) ? [...base.messages] : [];
-  const configSnapshot = ensureObject(base.config);
-  return {
-    session: {
-      session_id: typeof session.session_id === 'string' ? session.session_id : '',
-      project_id: typeof session.project_id === 'string' ? session.project_id : '',
-      active_node_id: typeof session.active_node_id === 'string' ? session.active_node_id : '',
-      timestamp: typeof session.timestamp === 'string' ? session.timestamp : new Date().toISOString(),
-    },
-    project_structure: sanitiseStructure(base.project_structure),
-    node_context: sanitiseNodeContext(base.node_context),
-    fetched_context: ensureObject(base.fetched_context),
-    working_history: typeof base.working_history === 'string' ? base.working_history : '',
-    messages,
-    last_user_message:
-      typeof base.last_user_message === 'string'
-        ? base.last_user_message
-        : deriveLastUserMessage(messages),
-    config: {
-      history_length: normaliseNumber(configSnapshot.history_length, 20, 1, 200),
-      include_project_structure: Boolean(
-        configSnapshot.include_project_structure ?? true
-      ),
-      include_context: Boolean(configSnapshot.include_context ?? true),
-      include_working_history: Boolean(
-        configSnapshot.include_working_history ?? true
-      ),
-      auto_refresh_interval: normaliseNumber(
-        configSnapshot.auto_refresh_interval,
-        0,
-        0,
-        600
-      ),
-    },
-  };
+  return normaliseWorkingMemory(memory);
 }
 
 function deriveLastUserMessage(messages) {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const entry = messages[i];
-    if (entry && typeof entry === 'object' && entry.role === 'user') {
-      const content = entry.content;
-      if (typeof content === 'string') {
-        return content;
-      }
-      if (Array.isArray(content)) {
-        return content
-          .map((part) => (typeof part === 'string' ? part : part?.text || ''))
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-      }
-    }
-  }
-  return '';
-}
-
-function normaliseNumber(value, fallback, min, max) {
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed)) {
-    return clamp(fallback, min, max);
-  }
-  return clamp(parsed, min, max);
-}
-
-function clamp(value, min, max) {
-  const lower = min === undefined ? value : Math.max(value, min);
-  const upper = max === undefined ? lower : Math.min(lower, max);
-  return upper;
+  return deriveLastUserMessageSchema(messages);
 }
 
 function resolveProjectId(memory) {
@@ -881,18 +823,50 @@ async function runUnlinkNodes(args, memory) {
 
 async function runGetWorkingMemory(memory) {
   const baseMemory = normaliseMemory(memory);
-  try {
-    const projectIdRaw = resolveProjectId(baseMemory);
-    const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
-    const includeStructure = baseMemory.config?.include_project_structure !== false;
-    if (projectId && includeStructure) {
-      const structure = await loadProjectStructure(projectId);
-      baseMemory.project_structure = structure;
-    }
-  } catch (error) {
-    console.warn('Failed to refresh project structure for working memory', error);
+  const sessionId =
+    typeof baseMemory.session?.session_id === 'string'
+      ? baseMemory.session.session_id.trim()
+      : '';
+  if (!sessionId) {
+    return { memory: baseMemory, __skipNormalise: true };
   }
-  return { memory: baseMemory, __skipNormalise: true };
+  const resolvedProjectIdRaw = resolveProjectId(baseMemory);
+  const resolvedProjectId =
+    typeof resolvedProjectIdRaw === 'string' ? resolvedProjectIdRaw.trim() : '';
+  try {
+    const { memory: stored } = await loadWorkingMemory({
+      sessionId,
+      projectId: resolvedProjectId,
+    });
+    const includeStructure = stored.config?.include_project_structure !== false;
+    const projectId = stored.session?.project_id || resolvedProjectId;
+    if (includeStructure && projectId) {
+      const projectNodes = Array.isArray(stored.project_structure?.project_graph?.nodes)
+        ? stored.project_structure.project_graph.nodes.length
+        : 0;
+      const elementNodes = Array.isArray(stored.project_structure?.elements_graph?.nodes)
+        ? stored.project_structure.elements_graph.nodes.length
+        : 0;
+      if (projectNodes === 0 && elementNodes === 0) {
+        try {
+          const structure = await loadProjectStructure(projectId);
+          stored.project_structure = structure;
+          await saveWorkingMemoryPart({
+            sessionId,
+            projectId,
+            part: 'project_structure',
+            value: structure,
+          });
+        } catch (structureError) {
+          console.warn('Failed to refresh project structure for working memory', structureError);
+        }
+      }
+    }
+    return { memory: stored, __skipNormalise: true };
+  } catch (error) {
+    console.warn('Failed to load working memory snapshot', error);
+    return { memory: baseMemory, __skipNormalise: true };
+  }
 }
 
 async function runSendMessage(args, memory) {
@@ -949,6 +923,32 @@ async function runSendMessage(args, memory) {
     message_type: savedMessage?.message_type ?? messageType,
     created_at: createdAt,
   };
+  try {
+    const { memory: stored } = await loadWorkingMemory({ sessionId });
+    const effectiveProjectId =
+      stored.session?.project_id || resolveProjectId(stored) || resolveProjectId(baseMemory);
+    const historyLength = stored.config?.history_length;
+    const updatedMessages = Array.isArray(stored.messages)
+      ? [...stored.messages, messagePayload]
+      : [messagePayload];
+    const { value: sanitisedMessages } = await saveWorkingMemoryPart({
+      sessionId,
+      projectId: effectiveProjectId,
+      part: 'messages',
+      value: updatedMessages,
+      options: { historyLength },
+    });
+    const lastUserMessage = deriveLastUserMessageSchema(sanitisedMessages);
+    await saveWorkingMemoryPart({
+      sessionId,
+      projectId: effectiveProjectId,
+      part: 'last_user_message',
+      value: lastUserMessage,
+      options: { messages: sanitisedMessages },
+    });
+  } catch (error) {
+    console.warn('Failed to update working memory messages', error);
+  }
   return { memory: baseMemory, message: messagePayload };
 }
 
@@ -991,6 +991,22 @@ async function runUpdateWorkingHistory(args, memory) {
     working_history: record?.working_history ?? summaryText,
     updated_at: updatedAt,
   };
+  const sessionId =
+    typeof baseMemory.session?.session_id === 'string'
+      ? baseMemory.session.session_id.trim()
+      : '';
+  if (sessionId) {
+    try {
+      await saveWorkingMemoryPart({
+        sessionId,
+        projectId,
+        part: 'working_history',
+        value: historyPayload.working_history,
+      });
+    } catch (error) {
+      console.warn('Failed to persist working history in working memory', error);
+    }
+  }
   return { memory: baseMemory, history: historyPayload };
 }
 

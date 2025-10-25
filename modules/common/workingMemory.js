@@ -1,9 +1,6 @@
-const MEMORY_STORAGE_KEY = 'story-graph-working-memory';
-const SETTINGS_STORAGE_KEY = 'story-graph-working-memory-settings';
-const SESSION_STORAGE_PREFIX = 'story-graph-session:';
-const STRUCTURE_STORAGE_PREFIX = 'story-graph-structure:';
+import { fetchJSON } from './api.js';
 
-const DEFAULT_SETTINGS = {
+const DEFAULT_CONFIG = {
   history_length: 20,
   include_project_structure: true,
   include_context: true,
@@ -13,13 +10,12 @@ const DEFAULT_SETTINGS = {
 
 const MAX_HISTORY_LENGTH = 200;
 
-let settings = loadSettings();
-let memory = loadMemory();
-
-const projectStructureCache = new Map();
-
-const memoryListeners = new Set();
-const settingsListeners = new Set();
+function safeString(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value);
+}
 
 function cloneJson(value) {
   if (value === null || value === undefined) {
@@ -29,7 +25,7 @@ function cloneJson(value) {
     try {
       return structuredClone(value);
     } catch (error) {
-      // Fallback below
+      // Ignore and fall back.
     }
   }
   try {
@@ -60,169 +56,10 @@ function cloneJson(value) {
   }
 }
 
-function loadSettings() {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return { ...DEFAULT_SETTINGS };
-  }
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) {
-      return { ...DEFAULT_SETTINGS };
-    }
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return { ...DEFAULT_SETTINGS };
-    }
-    return {
-      history_length: normaliseHistoryLength(parsed.history_length),
-      include_project_structure: Boolean(parsed.include_project_structure ?? DEFAULT_SETTINGS.include_project_structure),
-      include_context: Boolean(parsed.include_context ?? DEFAULT_SETTINGS.include_context),
-      include_working_history: Boolean(parsed.include_working_history ?? DEFAULT_SETTINGS.include_working_history),
-      auto_refresh_interval: normaliseAutoRefreshInterval(parsed.auto_refresh_interval),
-    };
-  } catch (error) {
-    console.warn('Failed to load working memory settings', error);
-    return { ...DEFAULT_SETTINGS };
-  }
-}
-
-function saveSettings(nextSettings) {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return;
-  }
-  try {
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
-  } catch (error) {
-    console.warn('Failed to persist working memory settings', error);
-  }
-}
-
-function buildDefaultMemory(currentSettings = settings) {
-  const timestamp = new Date().toISOString();
-  return {
-    session: {
-      session_id: '',
-      project_id: '',
-      active_node_id: '',
-      timestamp,
-    },
-    project_structure: sanitiseStructure({}),
-    node_context: {},
-    fetched_context: {},
-    working_history: '',
-    messages: [],
-    last_user_message: '',
-    config: { ...currentSettings },
-  };
-}
-
-function loadMemory() {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return buildDefaultMemory(settings);
-  }
-  try {
-    const raw = window.localStorage.getItem(MEMORY_STORAGE_KEY);
-    if (!raw) {
-      return buildDefaultMemory(settings);
-    }
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return buildDefaultMemory(settings);
-    }
-    const hydrated = buildDefaultMemory(settings);
-    hydrated.session = {
-      session_id: safeString(parsed.session?.session_id),
-      project_id: safeString(parsed.session?.project_id),
-      active_node_id: safeString(parsed.session?.active_node_id),
-      timestamp: parsed.session?.timestamp || hydrated.session.timestamp,
-    };
-    if (parsed.project_structure) {
-      hydrated.project_structure = sanitiseStructure(parsed.project_structure);
-    }
-    if (parsed.node_context) {
-      hydrated.node_context = sanitiseNodeContext(parsed.node_context);
-    }
-    if (parsed.fetched_context) {
-      hydrated.fetched_context = sanitiseFetchedContext(parsed.fetched_context);
-    }
-    hydrated.working_history = typeof parsed.working_history === 'string' ? parsed.working_history : '';
-    hydrated.messages = limitMessages(Array.isArray(parsed.messages) ? parsed.messages : []);
-    hydrated.last_user_message = deriveLastUserMessage(hydrated.messages);
-    hydrated.config = { ...settings };
-    return hydrated;
-  } catch (error) {
-    console.warn('Failed to hydrate working memory, resetting to defaults', error);
-    return buildDefaultMemory(settings);
-  }
-}
-
-function persistMemory() {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return;
-  }
-  try {
-    window.localStorage.setItem(MEMORY_STORAGE_KEY, JSON.stringify(memory));
-  } catch (error) {
-    console.warn('Failed to persist working memory snapshot', error);
-  }
-}
-
-function notifyMemory() {
-  if (!memoryListeners.size) {
-    return;
-  }
-  const snapshot = getWorkingMemorySnapshot();
-  memoryListeners.forEach((listener) => {
-    try {
-      listener(snapshot);
-    } catch (error) {
-      console.warn('Working memory listener failed', error);
-    }
-  });
-}
-
-function notifySettings() {
-  if (!settingsListeners.size) {
-    return;
-  }
-  const snapshot = { ...settings };
-  settingsListeners.forEach((listener) => {
-    try {
-      listener(snapshot);
-    } catch (error) {
-      console.warn('Working memory settings listener failed', error);
-    }
-  });
-}
-
-function ensureMemory() {
-  if (!memory) {
-    memory = buildDefaultMemory(settings);
-  }
-  return memory;
-}
-
-function touchTimestamp() {
-  ensureMemory().session.timestamp = new Date().toISOString();
-}
-
-function commitMemory() {
-  touchTimestamp();
-  persistMemory();
-  notifyMemory();
-}
-
-function safeString(value) {
-  if (value === null || value === undefined) {
-    return '';
-  }
-  return String(value);
-}
-
 function normaliseHistoryLength(value) {
   const parsed = Number.parseInt(value, 10);
   if (Number.isNaN(parsed) || parsed < 1) {
-    return DEFAULT_SETTINGS.history_length;
+    return DEFAULT_CONFIG.history_length;
   }
   return Math.min(parsed, MAX_HISTORY_LENGTH);
 }
@@ -233,7 +70,7 @@ function normaliseAutoRefreshInterval(value) {
   }
   const parsed = Number.parseInt(value, 10);
   if (Number.isNaN(parsed) || parsed < 0) {
-    return DEFAULT_SETTINGS.auto_refresh_interval;
+    return DEFAULT_CONFIG.auto_refresh_interval;
   }
   return parsed;
 }
@@ -247,11 +84,14 @@ function sanitiseCustomFields(list = []) {
       if (!field || typeof field !== 'object') {
         return null;
       }
-      const key = safeString(field.key ?? '').trim();
-      const value = safeString(field.value ?? '');
+      const key = safeString(field.key).trim();
+      const value = safeString(field.value);
+      if (!key && !value) {
+        return null;
+      }
       return { key, value };
     })
-    .filter((field) => field && (field.key || field.value));
+    .filter(Boolean);
 }
 
 function sanitiseLinkedElements(list = []) {
@@ -325,11 +165,7 @@ function sanitiseGraphEdge(edge) {
   if (!from || !to) {
     return null;
   }
-  return {
-    from,
-    to,
-    type: safeString(edge.type || 'LINKS_TO'),
-  };
+  return { from, to, type: safeString(edge.type || 'LINKS_TO') };
 }
 
 function sanitiseGraph(graph) {
@@ -345,79 +181,8 @@ function sanitiseGraph(graph) {
   return { nodes, edges };
 }
 
-function normaliseGraphForComparison(graph) {
-  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
-  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-
-  const normalisedNodes = nodes
-    .map((node) => {
-      if (!node || typeof node !== 'object') {
-        return null;
-      }
-      const payload = {
-        id: safeString(node.id),
-        label: safeString(node.label ?? ''),
-        type: safeString(node.type ?? ''),
-        builder: safeString(node.builder ?? ''),
-      };
-      if (Array.isArray(node.children) && node.children.length) {
-        payload.children = [...new Set(node.children.map((child) => safeString(child)).filter(Boolean))].sort();
-      }
-      if (Array.isArray(node.links) && node.links.length) {
-        payload.links = node.links
-          .map((link) => {
-            if (!link || typeof link !== 'object') {
-              return null;
-            }
-            const to = safeString(link.to);
-            if (!to) {
-              return null;
-            }
-            return { to, type: safeString(link.type || 'LINKS_TO') };
-          })
-          .filter(Boolean)
-          .sort((a, b) => {
-            if (a.to !== b.to) {
-              return a.to.localeCompare(b.to);
-            }
-            return a.type.localeCompare(b.type);
-          });
-      }
-      return payload;
-    })
-    .filter((node) => node && node.id)
-    .sort((a, b) => a.id.localeCompare(b.id));
-
-  const normalisedEdges = edges
-    .map((edge) => {
-      if (!edge || typeof edge !== 'object') {
-        return null;
-      }
-      const from = safeString(edge.from);
-      const to = safeString(edge.to);
-      if (!from || !to) {
-        return null;
-      }
-      return { from, to, type: safeString(edge.type || 'LINKS_TO') };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      if (a.from !== b.from) {
-        return a.from.localeCompare(b.from);
-      }
-      if (a.to !== b.to) {
-        return a.to.localeCompare(b.to);
-      }
-      return a.type.localeCompare(b.type);
-    });
-
-  return { nodes: normalisedNodes, edges: normalisedEdges };
-}
-
 function graphsEqual(a, b) {
-  const first = normaliseGraphForComparison(a);
-  const second = normaliseGraphForComparison(b);
-  return JSON.stringify(first) === JSON.stringify(second);
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function sanitiseStructure(structure) {
@@ -446,91 +211,11 @@ function graphIsEmpty(graph) {
   return nodes.length === 0 && edges.length === 0;
 }
 
-function getStructureStorageKey(projectId) {
-  const id = safeString(projectId);
-  return `${STRUCTURE_STORAGE_PREFIX}${id}`;
-}
-
-function getCachedProjectStructure(projectId) {
-  const id = safeString(projectId);
-  if (!id) {
-    return null;
-  }
-  if (projectStructureCache.has(id)) {
-    return sanitiseStructure(projectStructureCache.get(id));
-  }
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return null;
-  }
-  try {
-    const raw = window.localStorage.getItem(getStructureStorageKey(id));
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw);
-    const sanitised = sanitiseStructure(parsed);
-    projectStructureCache.set(id, sanitised);
-    return sanitiseStructure(sanitised);
-  } catch (error) {
-    console.warn('Failed to load cached project structure', error);
-    return null;
-  }
-}
-
-function storeCachedProjectStructure(projectId, structure) {
-  const id = safeString(projectId);
-  if (!id) {
-    return;
-  }
-  const sanitised = sanitiseStructure(structure);
-  projectStructureCache.set(id, sanitised);
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return;
-  }
-  try {
-    window.localStorage.setItem(getStructureStorageKey(id), JSON.stringify(sanitised));
-  } catch (error) {
-    console.warn('Failed to persist project structure cache', error);
-  }
-}
-
-function clearCachedProjectStructure(projectId) {
-  if (!projectId) {
-    projectStructureCache.clear();
-    if (typeof window !== 'undefined' && window.localStorage) {
-      try {
-        const keys = Object.keys(window.localStorage);
-        keys
-          .filter((key) => key.startsWith(STRUCTURE_STORAGE_PREFIX))
-          .forEach((key) => {
-            window.localStorage.removeItem(key);
-          });
-      } catch (error) {
-        console.warn('Failed to clear cached project structures', error);
-      }
-    }
-    return;
-  }
-  const id = safeString(projectId);
-  if (!id) {
-    return;
-  }
-  projectStructureCache.delete(id);
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return;
-  }
-  try {
-    window.localStorage.removeItem(getStructureStorageKey(id));
-  } catch (error) {
-    console.warn('Failed to remove cached project structure', error);
-  }
-}
-
 function sanitiseNodeContext(context) {
   if (!context || typeof context !== 'object') {
     return {};
   }
-  const nodeContext = {
+  return {
     id: safeString(context.id ?? context.node_id ?? ''),
     label: safeString(context.label ?? context.title ?? ''),
     type: safeString(context.type ?? context.builder ?? ''),
@@ -540,14 +225,13 @@ function sanitiseNodeContext(context) {
       linked_elements: context.linked_elements,
     }),
   };
-  return nodeContext;
 }
 
-function sanitiseFetchedContext(value) {
-  if (!value || typeof value !== 'object') {
+function sanitiseFetchedContext(context) {
+  if (!context || typeof context !== 'object') {
     return {};
   }
-  return cloneJson(value);
+  return cloneJson(context);
 }
 
 function sanitiseMessage(message) {
@@ -558,30 +242,35 @@ function sanitiseMessage(message) {
   return {
     id: safeString(message.id),
     session_id: safeString(message.session_id),
-    node_id: message.node_id === null || message.node_id === undefined || message.node_id === ''
-      ? null
-      : safeString(message.node_id),
+    node_id:
+      message.node_id === null || message.node_id === undefined || message.node_id === ''
+        ? null
+        : safeString(message.node_id),
     role: safeString(message.role || 'user'),
     content: safeString(message.content || ''),
     created_at: createdAt,
   };
 }
 
-function limitMessages(messages) {
-  const list = Array.isArray(messages) ? messages : [];
-  const sanitised = list
-    .map(sanitiseMessage)
-    .filter(Boolean)
+function sortMessages(messages) {
+  return messages
+    .slice()
     .sort((a, b) => {
       const aTime = a.created_at ? Date.parse(a.created_at) || 0 : 0;
       const bTime = b.created_at ? Date.parse(b.created_at) || 0 : 0;
       return aTime - bTime;
     });
-  const max = normaliseHistoryLength(settings.history_length);
-  if (sanitised.length <= max) {
-    return sanitised;
+}
+
+function limitMessages(messages, historyLength = DEFAULT_CONFIG.history_length) {
+  const list = Array.isArray(messages) ? messages : [];
+  const sanitised = list.map(sanitiseMessage).filter(Boolean);
+  const ordered = sortMessages(sanitised);
+  const limit = normaliseHistoryLength(historyLength);
+  if (ordered.length <= limit) {
+    return ordered;
   }
-  return sanitised.slice(sanitised.length - max);
+  return ordered.slice(ordered.length - limit);
 }
 
 function deriveLastUserMessage(messages) {
@@ -594,20 +283,195 @@ function deriveLastUserMessage(messages) {
   return '';
 }
 
-function applySettingsToMemory() {
-  const target = ensureMemory();
-  target.config = { ...settings };
-  if (!settings.include_project_structure) {
+function buildDefaultMemory(overrides = {}) {
+  const timestamp = new Date().toISOString();
+  const config = {
+    history_length: normaliseHistoryLength(overrides.config?.history_length ?? DEFAULT_CONFIG.history_length),
+    include_project_structure: Boolean(
+      overrides.config?.include_project_structure ?? DEFAULT_CONFIG.include_project_structure
+    ),
+    include_context: Boolean(overrides.config?.include_context ?? DEFAULT_CONFIG.include_context),
+    include_working_history: Boolean(
+      overrides.config?.include_working_history ?? DEFAULT_CONFIG.include_working_history
+    ),
+    auto_refresh_interval: normaliseAutoRefreshInterval(
+      overrides.config?.auto_refresh_interval ?? DEFAULT_CONFIG.auto_refresh_interval
+    ),
+  };
+  const messages = limitMessages(overrides.messages, config.history_length);
+  const lastUserMessage = overrides.last_user_message
+    ? safeString(overrides.last_user_message)
+    : deriveLastUserMessage(messages);
+  return {
+    session: {
+      session_id: safeString(overrides.session?.session_id ?? ''),
+      project_id: safeString(overrides.session?.project_id ?? ''),
+      active_node_id: safeString(overrides.session?.active_node_id ?? ''),
+      timestamp: overrides.session?.timestamp || timestamp,
+    },
+    project_structure: sanitiseStructure(overrides.project_structure),
+    node_context: sanitiseNodeContext(overrides.node_context),
+    fetched_context: sanitiseFetchedContext(overrides.fetched_context),
+    working_history: typeof overrides.working_history === 'string' ? overrides.working_history : '',
+    messages,
+    last_user_message: lastUserMessage,
+    config,
+  };
+}
+
+function sanitiseMemorySnapshot(snapshot) {
+  const base = buildDefaultMemory();
+  if (!snapshot || typeof snapshot !== 'object') {
+    return base;
+  }
+  const session = snapshot.session && typeof snapshot.session === 'object' ? snapshot.session : {};
+  const configSource = snapshot.config && typeof snapshot.config === 'object' ? snapshot.config : {};
+  const config = {
+    history_length: normaliseHistoryLength(configSource.history_length ?? base.config.history_length),
+    include_project_structure: Boolean(
+      configSource.include_project_structure ?? base.config.include_project_structure
+    ),
+    include_context: Boolean(configSource.include_context ?? base.config.include_context),
+    include_working_history: Boolean(
+      configSource.include_working_history ?? base.config.include_working_history
+    ),
+    auto_refresh_interval: normaliseAutoRefreshInterval(
+      configSource.auto_refresh_interval ?? base.config.auto_refresh_interval
+    ),
+  };
+  const messages = limitMessages(snapshot.messages, config.history_length);
+  const lastUserMessage = snapshot.last_user_message
+    ? safeString(snapshot.last_user_message)
+    : deriveLastUserMessage(messages);
+  return {
+    session: {
+      session_id: safeString(session.session_id ?? base.session.session_id),
+      project_id: safeString(session.project_id ?? base.session.project_id),
+      active_node_id: safeString(session.active_node_id ?? base.session.active_node_id),
+      timestamp: typeof session.timestamp === 'string' && session.timestamp
+        ? session.timestamp
+        : base.session.timestamp,
+    },
+    project_structure: sanitiseStructure(snapshot.project_structure ?? base.project_structure),
+    node_context: sanitiseNodeContext(snapshot.node_context ?? base.node_context),
+    fetched_context: sanitiseFetchedContext(snapshot.fetched_context ?? base.fetched_context),
+    working_history: typeof snapshot.working_history === 'string' ? snapshot.working_history : '',
+    messages,
+    last_user_message: lastUserMessage,
+    config,
+  };
+}
+
+function applyConfigVisibility(target) {
+  if (!target.config.include_project_structure) {
     target.project_structure = sanitiseStructure({});
   }
-  if (!settings.include_context) {
+  if (!target.config.include_context) {
     target.node_context = {};
   }
-  if (!settings.include_working_history) {
+  if (!target.config.include_working_history) {
     target.working_history = '';
   }
-  target.messages = limitMessages(target.messages || []);
+  target.messages = limitMessages(target.messages, target.config.history_length);
   target.last_user_message = deriveLastUserMessage(target.messages);
+}
+
+const memoryListeners = new Set();
+const settingsListeners = new Set();
+
+let memory = buildDefaultMemory();
+let pendingLoad = null;
+
+function updateTimestamp() {
+  memory.session.timestamp = new Date().toISOString();
+}
+
+function notifyMemory() {
+  const snapshot = getWorkingMemorySnapshot();
+  memoryListeners.forEach((listener) => {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.warn('Working memory listener failed', error);
+    }
+  });
+}
+
+function notifySettings() {
+  const snapshot = getWorkingMemorySettings();
+  settingsListeners.forEach((listener) => {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.warn('Working memory settings listener failed', error);
+    }
+  });
+}
+
+function persistPart(part, value, options = null) {
+  const sessionId = memory.session.session_id;
+  if (!sessionId) {
+    return Promise.resolve();
+  }
+  const body = {
+    session_id: sessionId,
+    project_id: memory.session.project_id || '',
+    value,
+  };
+  if (options && Object.keys(options).length) {
+    body.options = options;
+  }
+  return fetchJSON(`/api/working-memory/${encodeURIComponent(part)}`, {
+    method: 'PATCH',
+    body,
+  }).catch((error) => {
+    console.warn(`Failed to persist working memory part ${part}`, error);
+  });
+}
+
+async function loadMemoryFromServer(sessionId, projectId, overrides = {}) {
+  if (!sessionId) {
+    return;
+  }
+  const params = new URLSearchParams({ session_id: sessionId });
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  try {
+    const data = await fetchJSON(`/api/working-memory?${params.toString()}`);
+    const next = sanitiseMemorySnapshot(data?.memory);
+    memory = next;
+    memory.session.session_id = sessionId;
+    if (projectId) {
+      memory.session.project_id = safeString(projectId);
+    }
+    if (overrides.project_id !== undefined) {
+      memory.session.project_id = safeString(overrides.project_id);
+    }
+    if (overrides.active_node_id !== undefined) {
+      memory.session.active_node_id = safeString(overrides.active_node_id);
+    }
+    applyConfigVisibility(memory);
+    updateTimestamp();
+    notifyMemory();
+    notifySettings();
+    persistPart('session', { ...memory.session });
+  } catch (error) {
+    console.warn('Failed to load working memory from server', error);
+  }
+}
+
+function ensureSessionLoaded(sessionId, projectId, overrides = {}) {
+  if (!sessionId) {
+    return;
+  }
+  if (pendingLoad) {
+    pendingLoad = pendingLoad
+      .then(() => loadMemoryFromServer(sessionId, projectId, overrides))
+      .catch(() => loadMemoryFromServer(sessionId, projectId, overrides));
+  } else {
+    pendingLoad = loadMemoryFromServer(sessionId, projectId, overrides);
+  }
 }
 
 function buildNodeScopedSnapshot(snapshot, nodeId) {
@@ -639,8 +503,8 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
 
   const hasProjectNode = projectNodes.some((node) => node.id === targetId);
   const hasElementNode = elementNodes.some((node) => node.id === targetId);
+
   if (hasProjectNode) {
-    projectNodeIds.add(targetId);
     projectEdges.forEach((edge) => {
       if (edge.from === targetId) {
         projectNodeIds.add(edge.to);
@@ -650,8 +514,8 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
       }
     });
   }
+
   if (hasElementNode) {
-    elementNodeIds.add(targetId);
     elementEdges.forEach((edge) => {
       if (edge.from === targetId) {
         elementNodeIds.add(edge.to);
@@ -662,46 +526,23 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
     });
   }
 
-  elementEdges.forEach((edge) => {
-    if (edge.from === targetId && edge.to) {
-      elementNodeIds.add(edge.to);
-    }
-    if (edge.to === targetId && edge.from) {
-      elementNodeIds.add(edge.from);
-    }
-  });
+  const filterNodes = (list, set) =>
+    list.filter((node) => node.id === targetId || set.has(node.id));
 
-  const scopedProjectNodes = hasProjectNode
-    ? projectNodes.filter((node) => projectNodeIds.has(node.id))
-    : [];
-  const scopedProjectEdges = hasProjectNode
-    ? projectEdges.filter(
-        (edge) => projectNodeIds.has(edge.from) || projectNodeIds.has(edge.to)
-      )
-    : [];
-
-  const scopedElementNodes = (hasElementNode || hasProjectNode)
-    ? elementNodes.filter((node) => elementNodeIds.has(node.id))
-    : [];
-  const scopedElementEdges = (hasElementNode || hasProjectNode)
-    ? elementEdges.filter(
-        (edge) =>
-          elementNodeIds.has(edge.from) ||
-          elementNodeIds.has(edge.to) ||
-          projectNodeIds.has(edge.from) ||
-          projectNodeIds.has(edge.to)
-      )
-    : [];
-
-  scoped.project_structure = sanitiseStructure({
-    project_graph: { nodes: scopedProjectNodes, edges: scopedProjectEdges },
-    elements_graph: { nodes: scopedElementNodes, edges: scopedElementEdges },
-  });
-  if (snapshot.node_context?.id === targetId) {
-    scoped.node_context = cloneJson(snapshot.node_context);
-  } else {
-    scoped.node_context = {};
-  }
+  scoped.project_structure = {
+    project_graph: {
+      nodes: hasProjectNode ? filterNodes(projectNodes, projectNodeIds) : [],
+      edges: hasProjectNode
+        ? projectEdges.filter((edge) => edge.from === targetId || edge.to === targetId)
+        : [],
+    },
+    elements_graph: {
+      nodes: hasElementNode ? filterNodes(elementNodes, elementNodeIds) : [],
+      edges: hasElementNode
+        ? elementEdges.filter((edge) => edge.from === targetId || edge.to === targetId)
+        : [],
+    },
+  };
   scoped.messages = Array.isArray(snapshot.messages)
     ? snapshot.messages.filter((message) => !message.node_id || message.node_id === targetId)
     : [];
@@ -709,31 +550,8 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
   return scoped;
 }
 
-function readStoredSession(projectId) {
-  if (!projectId || typeof window === 'undefined' || !window.localStorage) {
-    return null;
-  }
-  try {
-    const raw = window.localStorage.getItem(`${SESSION_STORAGE_PREFIX}${projectId}`);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return null;
-    }
-    if (!parsed.id) {
-      return null;
-    }
-    return parsed;
-  } catch (error) {
-    console.warn('Failed to read stored session for working memory', error);
-    return null;
-  }
-}
-
 export function getWorkingMemorySnapshot() {
-  return cloneJson(ensureMemory());
+  return cloneJson(memory);
 }
 
 export function getWorkingMemorySnapshotForNode(nodeId) {
@@ -753,224 +571,168 @@ export function serialiseWorkingMemory(options = {}) {
 }
 
 export function initialiseWorkingMemory({ projectId, sessionId, activeNodeId } = {}) {
-  const storedSession = projectId ? readStoredSession(projectId) : null;
-  memory = buildDefaultMemory(settings);
+  memory = buildDefaultMemory();
   if (projectId !== undefined) {
     memory.session.project_id = safeString(projectId);
-    const cachedStructure = getCachedProjectStructure(projectId);
-    if (cachedStructure) {
-      memory.project_structure = sanitiseStructure(cachedStructure);
-    }
   }
-  if (storedSession) {
-    memory.session.session_id = safeString(storedSession.id);
-    memory.session.project_id = safeString(storedSession.project_id ?? projectId ?? memory.session.project_id);
-    memory.session.active_node_id = safeString(storedSession.active_node ?? '');
-  } else if (sessionId !== undefined) {
+  if (sessionId !== undefined) {
     memory.session.session_id = safeString(sessionId);
   }
   if (activeNodeId !== undefined) {
     memory.session.active_node_id = safeString(activeNodeId);
   }
-  applySettingsToMemory();
-  commitMemory();
+  applyConfigVisibility(memory);
+  updateTimestamp();
+  notifyMemory();
+  notifySettings();
+  if (memory.session.session_id) {
+    ensureSessionLoaded(memory.session.session_id, memory.session.project_id, {
+      project_id: memory.session.project_id,
+      active_node_id: memory.session.active_node_id,
+    });
+  }
   return getWorkingMemorySnapshot();
 }
 
 export function resetWorkingMemory() {
-  memory = buildDefaultMemory(settings);
-  commitMemory();
+  memory = buildDefaultMemory();
+  updateTimestamp();
+  notifyMemory();
+  notifySettings();
   return getWorkingMemorySnapshot();
 }
 
 export function setWorkingMemorySession(partial = {}) {
-  const target = ensureMemory();
-  let changed = false;
+  const next = { ...memory.session };
+  const overrides = {};
   if (partial.session_id !== undefined) {
-    const next = safeString(partial.session_id);
-    if (target.session.session_id !== next) {
-      target.session.session_id = next;
-      changed = true;
-    }
+    next.session_id = safeString(partial.session_id);
   }
   if (partial.project_id !== undefined) {
-    const next = safeString(partial.project_id);
-    if (target.session.project_id !== next) {
-      target.session.project_id = next;
-      changed = true;
-    }
+    next.project_id = safeString(partial.project_id);
+    overrides.project_id = next.project_id;
   }
   if (partial.active_node_id !== undefined) {
-    const next = safeString(partial.active_node_id);
-    if (target.session.active_node_id !== next) {
-      target.session.active_node_id = next;
-      changed = true;
-    }
+    next.active_node_id = safeString(partial.active_node_id);
+    overrides.active_node_id = next.active_node_id;
   }
-  if (!changed) {
+  const sessionChanged = next.session_id !== memory.session.session_id;
+  const projectChanged = next.project_id !== memory.session.project_id;
+  const nodeChanged = next.active_node_id !== memory.session.active_node_id;
+  if (!sessionChanged && !projectChanged && !nodeChanged) {
     return getWorkingMemorySnapshot();
   }
-  applySettingsToMemory();
-  commitMemory();
+  memory.session = next;
+  updateTimestamp();
+  applyConfigVisibility(memory);
+  notifyMemory();
+  notifySettings();
+  if (sessionChanged) {
+    ensureSessionLoaded(memory.session.session_id, memory.session.project_id, overrides);
+  } else if (memory.session.session_id) {
+    persistPart('session', { ...memory.session });
+  }
   return getWorkingMemorySnapshot();
 }
 
 export function setWorkingMemoryProjectStructure(structure = {}) {
-  const target = ensureMemory();
-  if (structure.project_id !== undefined) {
-    setWorkingMemorySession({ project_id: structure.project_id });
-  }
-  if (!settings.include_project_structure) {
-    if (Object.keys(target.project_structure || {}).length) {
-      target.project_structure = sanitiseStructure({});
-      commitMemory();
+  if (!memory.config.include_project_structure) {
+    if (!graphIsEmpty(memory.project_structure?.project_graph) || !graphIsEmpty(memory.project_structure?.elements_graph)) {
+      memory.project_structure = sanitiseStructure({});
+      updateTimestamp();
+      notifyMemory();
     }
     return getWorkingMemorySnapshot();
   }
-  const projectId = safeString(target.session.project_id || structure.project_id || '');
-  const cached = projectId ? getCachedProjectStructure(projectId) : null;
-  const current = sanitiseStructure(target.project_structure || cached || {});
-  const next = {
-    project_graph: current.project_graph,
-    elements_graph: current.elements_graph,
-  };
-
-  const hasProjectGraph = Object.prototype.hasOwnProperty.call(structure || {}, 'project_graph');
-  const hasElementsGraph = Object.prototype.hasOwnProperty.call(structure || {}, 'elements_graph');
-  const hasLegacyGraph =
-    !hasProjectGraph &&
-    !hasElementsGraph &&
-    structure &&
-    typeof structure === 'object' &&
-    (Array.isArray(structure.nodes) || Array.isArray(structure.edges));
-
-  let updated = false;
-  let receivedUpdate = false;
-
-  if (hasProjectGraph) {
-    receivedUpdate = true;
-    const sanitisedProject = sanitiseGraph(structure.project_graph);
-    if (!graphsEqual(current.project_graph, sanitisedProject)) {
-      next.project_graph = sanitisedProject;
-      updated = true;
-    }
-  } else if (!hasLegacyGraph && cached && graphIsEmpty(current.project_graph)) {
-    const cachedProject = sanitiseGraph(cached.project_graph);
-    if (!graphsEqual(current.project_graph, cachedProject)) {
-      next.project_graph = cachedProject;
-      updated = true;
-      if (!graphIsEmpty(cachedProject)) {
-        receivedUpdate = true;
-      }
-    }
-  }
-
-  if (hasElementsGraph) {
-    receivedUpdate = true;
-    const sanitisedElements = sanitiseGraph(structure.elements_graph);
-    if (!graphsEqual(current.elements_graph, sanitisedElements)) {
-      next.elements_graph = sanitisedElements;
-      updated = true;
-    }
-  } else if (cached && graphIsEmpty(current.elements_graph)) {
-    const cachedElements = sanitiseGraph(cached.elements_graph);
-    if (!graphsEqual(current.elements_graph, cachedElements)) {
-      next.elements_graph = cachedElements;
-      updated = true;
-      if (!graphIsEmpty(cachedElements)) {
-        receivedUpdate = true;
-      }
-    }
-  }
-
-  if (hasLegacyGraph) {
-    receivedUpdate = true;
-    const sanitisedLegacy = sanitiseGraph(structure);
-    if (!graphsEqual(current.project_graph, sanitisedLegacy)) {
-      next.project_graph = sanitisedLegacy;
-      updated = true;
-    }
-  }
-
-  if (!receivedUpdate) {
+  const next = sanitiseStructure(structure);
+  if (graphsEqual(memory.project_structure, next)) {
     return getWorkingMemorySnapshot();
   }
-
-  if (!updated) {
-    return getWorkingMemorySnapshot();
-  }
-
-  target.project_structure = sanitiseStructure(next);
-  if (projectId) {
-    storeCachedProjectStructure(projectId, target.project_structure);
-  }
-  commitMemory();
+  memory.project_structure = next;
+  updateTimestamp();
+  notifyMemory();
+  persistPart('project_structure', next);
   return getWorkingMemorySnapshot();
 }
 
 export function setWorkingMemoryNodeContext(context) {
-  const target = ensureMemory();
-  if (!settings.include_context) {
-    if (Object.keys(target.node_context || {}).length) {
-      target.node_context = {};
-      commitMemory();
+  if (!memory.config.include_context) {
+    if (Object.keys(memory.node_context || {}).length) {
+      memory.node_context = {};
+      updateTimestamp();
+      notifyMemory();
     }
     return getWorkingMemorySnapshot();
   }
-  target.node_context = sanitiseNodeContext(context);
-  commitMemory();
+  const next = sanitiseNodeContext(context);
+  if (JSON.stringify(memory.node_context) === JSON.stringify(next)) {
+    return getWorkingMemorySnapshot();
+  }
+  memory.node_context = next;
+  updateTimestamp();
+  notifyMemory();
+  persistPart('node_context', next);
   return getWorkingMemorySnapshot();
 }
 
 export function setWorkingMemoryFetchedContext(context) {
-  const target = ensureMemory();
-  target.fetched_context = sanitiseFetchedContext(context);
-  commitMemory();
+  const next = sanitiseFetchedContext(context);
+  if (JSON.stringify(memory.fetched_context) === JSON.stringify(next)) {
+    return getWorkingMemorySnapshot();
+  }
+  memory.fetched_context = next;
+  updateTimestamp();
+  notifyMemory();
+  persistPart('fetched_context', next);
   return getWorkingMemorySnapshot();
 }
 
 export function setWorkingMemoryMessages(messages) {
-  const target = ensureMemory();
-  target.messages = limitMessages(messages);
-  target.last_user_message = deriveLastUserMessage(target.messages);
-  commitMemory();
+  const next = limitMessages(messages, memory.config.history_length);
+  if (JSON.stringify(memory.messages) === JSON.stringify(next)) {
+    return getWorkingMemorySnapshot();
+  }
+  memory.messages = next;
+  memory.last_user_message = deriveLastUserMessage(next);
+  updateTimestamp();
+  notifyMemory();
+  persistPart('messages', next, { historyLength: memory.config.history_length });
+  persistPart('last_user_message', memory.last_user_message, { messages: next });
   return getWorkingMemorySnapshot();
 }
 
 export function setWorkingMemoryWorkingHistory(value) {
-  const target = ensureMemory();
-  if (!settings.include_working_history) {
-    if (target.working_history) {
-      target.working_history = '';
-      commitMemory();
+  if (!memory.config.include_working_history) {
+    if (memory.working_history) {
+      memory.working_history = '';
+      updateTimestamp();
+      notifyMemory();
     }
     return getWorkingMemorySnapshot();
   }
-  if (typeof value === 'string') {
-    target.working_history = value;
-  } else if (value && typeof value === 'object') {
-    if (typeof value.text === 'string') {
-      target.working_history = value.text;
-    } else {
+  const next = typeof value === 'string' ? value : value?.text ? value.text : (() => {
       try {
-        target.working_history = JSON.stringify(value);
+        return JSON.stringify(value);
       } catch (error) {
-        target.working_history = '';
+        return '';
       }
-    }
-  } else {
-    target.working_history = '';
+    })();
+  if (memory.working_history === next) {
+    return getWorkingMemorySnapshot();
   }
-  commitMemory();
+  memory.working_history = next;
+  updateTimestamp();
+  notifyMemory();
+  persistPart('working_history', next);
   return getWorkingMemorySnapshot();
 }
 
 export function getWorkingMemorySettings() {
-  return { ...settings };
+  return { ...memory.config };
 }
 
 export function updateWorkingMemorySettings(partial = {}) {
-  const next = { ...settings };
+  const next = { ...memory.config };
   if (partial.history_length !== undefined) {
     next.history_length = normaliseHistoryLength(partial.history_length);
   }
@@ -986,12 +748,19 @@ export function updateWorkingMemorySettings(partial = {}) {
   if (partial.auto_refresh_interval !== undefined) {
     next.auto_refresh_interval = normaliseAutoRefreshInterval(partial.auto_refresh_interval);
   }
-  settings = next;
-  saveSettings(settings);
-  applySettingsToMemory();
-  commitMemory();
+  if (JSON.stringify(memory.config) === JSON.stringify(next)) {
+    return getWorkingMemorySettings();
+  }
+  memory.config = next;
+  applyConfigVisibility(memory);
+  updateTimestamp();
+  notifyMemory();
   notifySettings();
-  return { ...settings };
+  persistPart('config', next);
+  if (memory.session.session_id) {
+    persistPart('session', { ...memory.session });
+  }
+  return getWorkingMemorySettings();
 }
 
 export function subscribeWorkingMemory(listener) {
@@ -1015,7 +784,7 @@ export function subscribeWorkingMemorySettings(listener) {
   }
   settingsListeners.add(listener);
   try {
-    listener({ ...settings });
+    listener(getWorkingMemorySettings());
   } catch (error) {
     console.warn('Initial working memory settings listener failed', error);
   }
@@ -1025,16 +794,16 @@ export function subscribeWorkingMemorySettings(listener) {
 }
 
 export function appendWorkingMemoryMessage(message) {
-  const target = ensureMemory();
-  const existing = Array.isArray(target.messages) ? target.messages.slice() : [];
+  const existing = Array.isArray(memory.messages) ? memory.messages.slice() : [];
   existing.push(message);
   setWorkingMemoryMessages(existing);
 }
 
-export function getStoredSession(projectId) {
-  return readStoredSession(projectId);
+export function getStoredSession() {
+  return null;
 }
 
-applySettingsToMemory();
-commitMemory();
+applyConfigVisibility(memory);
+updateTimestamp();
+notifyMemory();
 notifySettings();
