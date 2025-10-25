@@ -11,6 +11,10 @@ const { getWriteSession } = require('../src/db/neo4j');
 const { pool } = require('../src/db/mysql');
 const { upsertNodeVersion, deleteNodeVersion } = require('../src/utils/nodeVersions');
 const config = require('../src/config');
+const {
+  getWorkingMemorySnapshot,
+  setWorkingMemorySnapshot,
+} = require('../src/state/workingMemoryStore');
 
 const router = express.Router();
 
@@ -95,7 +99,7 @@ const toolSchemas = [
   },
   {
     name: 'getWorkingMemory',
-    description: 'Return the current working memory snapshot passed from the client.',
+    description: 'Return the current working memory snapshot from the application runtime.',
     input_schema: {
       type: 'object',
       properties: {},
@@ -666,8 +670,9 @@ async function runUnlinkNodes(args, memory) {
   }
 }
 
-function runGetWorkingMemory(_args, memory) {
-  return { memory: normaliseMemory(memory) };
+function runGetWorkingMemory() {
+  const snapshot = getWorkingMemorySnapshot();
+  return { memory: snapshot ?? null, __skipNormalise: true };
 }
 
 function runUpdateWorkingMemory(args, memory) {
@@ -675,8 +680,10 @@ function runUpdateWorkingMemory(args, memory) {
   if (!memoryJson || typeof memoryJson !== 'object') {
     throw new ToolError('memory_json must be an object');
   }
-  const nextMemory = mergeWorkingMemory(memory, memoryJson);
-  return { memory: nextMemory };
+  const baseMemory = getWorkingMemorySnapshot() || memory;
+  const nextMemory = mergeWorkingMemory(baseMemory, memoryJson);
+  setWorkingMemorySnapshot(nextMemory);
+  return { memory: nextMemory, __skipNormalise: true };
 }
 
 function runUpdateThought(args, memory) {
@@ -700,13 +707,18 @@ const toolHandlers = {
   deleteNode: runDeleteNode,
   linkNodes: runLinkNodes,
   unlinkNodes: runUnlinkNodes,
-  getWorkingMemory: async (args, memory) => runGetWorkingMemory(args, memory),
+  getWorkingMemory: async () => runGetWorkingMemory(),
   updateWorkingMemory: async (args, memory) => runUpdateWorkingMemory(args, memory),
   updateThought: async (args, memory) => runUpdateThought(args, memory),
 };
 
 router.get('/tools', (req, res) => {
   res.json({ tools: toolSchemas });
+});
+
+router.get('/working-memory', (req, res) => {
+  const snapshot = getWorkingMemorySnapshot();
+  res.json(snapshot ?? null);
 });
 
 router.post('/call', async (req, res, next) => {
@@ -722,8 +734,15 @@ router.post('/call', async (req, res, next) => {
   }
   try {
     const result = await handler(args, memory);
-    const { memory: resultMemory, ...rest } = result || {};
-    const nextMemory = resultMemory ? normaliseMemory(resultMemory) : memory;
+    const { memory: resultMemory, __skipNormalise, ...rest } = result || {};
+    let nextMemory;
+    if (__skipNormalise) {
+      nextMemory = resultMemory === undefined ? null : resultMemory;
+    } else if (resultMemory) {
+      nextMemory = normaliseMemory(resultMemory);
+    } else {
+      nextMemory = memory;
+    }
     const payload = {
       tool: toolName,
       result: rest,

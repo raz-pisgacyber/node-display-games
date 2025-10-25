@@ -155,3 +155,10 @@
   - Synced autosave and refresh flows to update only the active node’s metadata while reloading lightweight project structures, trimming autosave payloads.
   - Hardened client and MCP sanitisation so snapshots always match the documented schema, and documented the expectations in `AGENTS.md`.
 - Verification: Manual reasoning only; no automated tests are present.
+## 2025-11-02 11:00 UTC
+- Files modified: `mcp/index.js`, `src/state/workingMemoryStore.js`, `agent_history`.
+- Completed tasks:
+  - Introduced a shared working-memory store in the main app runtime so MCP tools can read the latest snapshot without relying on request payloads.
+  - Updated the `getWorkingMemory` tool to return the live snapshot and added a GET `/mcp/working-memory` endpoint for stateless fetches.
+  - Ensured `updateWorkingMemory` persists updates to the shared store while keeping other MCP tools unchanged.
+- Verification: Not run (infrastructure-only changes).
