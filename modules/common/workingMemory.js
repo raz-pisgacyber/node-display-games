@@ -378,6 +378,81 @@ function sanitiseGraph(graph) {
   return { nodes, edges };
 }
 
+function normaliseGraphForComparison(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+
+  const normalisedNodes = nodes
+    .map((node) => {
+      if (!node || typeof node !== 'object') {
+        return null;
+      }
+      const payload = {
+        id: safeString(node.id),
+        label: safeString(node.label ?? ''),
+        type: safeString(node.type ?? ''),
+        builder: safeString(node.builder ?? ''),
+      };
+      if (Array.isArray(node.children) && node.children.length) {
+        payload.children = [...new Set(node.children.map((child) => safeString(child)).filter(Boolean))].sort();
+      }
+      if (Array.isArray(node.links) && node.links.length) {
+        payload.links = node.links
+          .map((link) => {
+            if (!link || typeof link !== 'object') {
+              return null;
+            }
+            const to = safeString(link.to);
+            if (!to) {
+              return null;
+            }
+            return { to, type: safeString(link.type || 'LINKS_TO') };
+          })
+          .filter(Boolean)
+          .sort((a, b) => {
+            if (a.to !== b.to) {
+              return a.to.localeCompare(b.to);
+            }
+            return a.type.localeCompare(b.type);
+          });
+      }
+      return payload;
+    })
+    .filter((node) => node && node.id)
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  const normalisedEdges = edges
+    .map((edge) => {
+      if (!edge || typeof edge !== 'object') {
+        return null;
+      }
+      const from = safeString(edge.from);
+      const to = safeString(edge.to);
+      if (!from || !to) {
+        return null;
+      }
+      return { from, to, type: safeString(edge.type || 'LINKS_TO') };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.from !== b.from) {
+        return a.from.localeCompare(b.from);
+      }
+      if (a.to !== b.to) {
+        return a.to.localeCompare(b.to);
+      }
+      return a.type.localeCompare(b.type);
+    });
+
+  return { nodes: normalisedNodes, edges: normalisedEdges };
+}
+
+function graphsEqual(a, b) {
+  const first = normaliseGraphForComparison(a);
+  const second = normaliseGraphForComparison(b);
+  return JSON.stringify(first) === JSON.stringify(second);
+}
+
 function sanitiseStructure(structure) {
   if (!structure || typeof structure !== 'object') {
     return {
@@ -695,7 +770,60 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
     }
     return getWorkingMemorySnapshot();
   }
-  target.project_structure = sanitiseStructure(structure);
+  const current = sanitiseStructure(target.project_structure || {});
+  const next = {
+    project_graph: current.project_graph,
+    elements_graph: current.elements_graph,
+  };
+
+  const hasProjectGraph = Object.prototype.hasOwnProperty.call(structure || {}, 'project_graph');
+  const hasElementsGraph = Object.prototype.hasOwnProperty.call(structure || {}, 'elements_graph');
+  const hasLegacyGraph =
+    !hasProjectGraph &&
+    !hasElementsGraph &&
+    structure &&
+    typeof structure === 'object' &&
+    (Array.isArray(structure.nodes) || Array.isArray(structure.edges));
+
+  let updated = false;
+  let receivedUpdate = false;
+
+  if (hasProjectGraph) {
+    receivedUpdate = true;
+    const sanitisedProject = sanitiseGraph(structure.project_graph);
+    if (!graphsEqual(current.project_graph, sanitisedProject)) {
+      next.project_graph = sanitisedProject;
+      updated = true;
+    }
+  }
+
+  if (hasElementsGraph) {
+    receivedUpdate = true;
+    const sanitisedElements = sanitiseGraph(structure.elements_graph);
+    if (!graphsEqual(current.elements_graph, sanitisedElements)) {
+      next.elements_graph = sanitisedElements;
+      updated = true;
+    }
+  }
+
+  if (hasLegacyGraph) {
+    receivedUpdate = true;
+    const sanitisedLegacy = sanitiseGraph(structure);
+    if (!graphsEqual(current.project_graph, sanitisedLegacy)) {
+      next.project_graph = sanitisedLegacy;
+      updated = true;
+    }
+  }
+
+  if (!receivedUpdate) {
+    return getWorkingMemorySnapshot();
+  }
+
+  if (!updated) {
+    return getWorkingMemorySnapshot();
+  }
+
+  target.project_structure = sanitiseStructure(next);
   commitMemory();
   return getWorkingMemorySnapshot();
 }

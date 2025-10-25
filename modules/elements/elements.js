@@ -173,7 +173,9 @@ function syncWorkingMemoryStructure(projectId, linkManager) {
   if (projectId) {
     setWorkingMemorySession({ project_id: projectId });
   }
-  setWorkingMemoryProjectStructure(buildElementsStructure(projectId, linkManager));
+  setWorkingMemoryProjectStructure({
+    elements_graph: buildElementsStructure(projectId, linkManager),
+  });
 }
 
 function syncWorkingMemoryNode(node, projectId) {

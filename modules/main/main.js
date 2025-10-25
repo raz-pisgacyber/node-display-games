@@ -11,6 +11,7 @@ import {
   subscribeWorkingMemorySettings,
   resetWorkingMemory,
 } from '../common/workingMemory.js';
+import { buildStructureFromGraph } from '../common/projectStructure.js';
 import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
 
 const AUTOSAVE_DELAY = 1600;
@@ -310,20 +311,7 @@ function buildWorkingMemoryMeta(meta = {}, extras = {}) {
 }
 
 function buildProjectStructurePayload() {
-  if (!state.projectId) {
-    return { nodes: [], edges: [] };
-  }
-  const nodes = state.graphNodes.map((node) => ({
-    id: String(node.id),
-    label: node.label || '',
-    type: deriveNodeTypeForMemory(node),
-  }));
-  const edges = state.graphEdges.map((edge) => ({
-    from: String(edge.from),
-    to: String(edge.to),
-    type: edge.type || 'LINKS_TO',
-  }));
-  return { nodes, edges };
+  return buildStructureFromGraph(state.graphNodes, state.graphEdges);
 }
 
 function syncWorkingMemoryProjectStructure() {
@@ -392,7 +380,10 @@ function syncWorkingMemoryWorkingHistory() {
 
 function resetWorkingMemoryForProject(projectId) {
   initialiseWorkingMemory({ projectId });
-  setWorkingMemoryProjectStructure({ nodes: [], edges: [] });
+  setWorkingMemoryProjectStructure({
+    project_graph: { nodes: [], edges: [] },
+    elements_graph: { nodes: [], edges: [] },
+  });
   setWorkingMemoryNodeContext({});
   setWorkingMemoryMessages([]);
   setWorkingMemoryWorkingHistory('');
