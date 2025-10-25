@@ -881,6 +881,17 @@ async function runUnlinkNodes(args, memory) {
 
 async function runGetWorkingMemory(memory) {
   const baseMemory = normaliseMemory(memory);
+  try {
+    const projectIdRaw = resolveProjectId(baseMemory);
+    const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+    const includeStructure = baseMemory.config?.include_project_structure !== false;
+    if (projectId && includeStructure) {
+      const structure = await loadProjectStructure(projectId);
+      baseMemory.project_structure = structure;
+    }
+  } catch (error) {
+    console.warn('Failed to refresh project structure for working memory', error);
+  }
   return { memory: baseMemory, __skipNormalise: true };
 }
 
