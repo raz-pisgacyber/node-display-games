@@ -185,6 +185,37 @@ function graphsEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function hasOwn(object, key) {
+  if (!object || typeof object !== 'object') {
+    return false;
+  }
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function normaliseStructureScope(scope) {
+  if (typeof scope !== 'string') {
+    return 'all';
+  }
+  const trimmed = scope.trim().toLowerCase();
+  if (trimmed === 'project' || trimmed === 'elements') {
+    return trimmed;
+  }
+  return 'all';
+}
+
+function detectStructureIntent(structure) {
+  if (!structure || typeof structure !== 'object') {
+    return { hasProjectGraph: false, hasElementsGraph: false, fallbackGraph: false };
+  }
+  const hasProjectGraph = hasOwn(structure, 'project_graph');
+  const hasElementsGraph = hasOwn(structure, 'elements_graph');
+  const fallbackGraph =
+    !hasProjectGraph &&
+    !hasElementsGraph &&
+    (Array.isArray(structure.nodes) || Array.isArray(structure.edges));
+  return { hasProjectGraph, hasElementsGraph, fallbackGraph };
+}
+
 function sanitiseStructure(structure) {
   if (!structure || typeof structure !== 'object') {
     return {
@@ -635,7 +666,7 @@ export function setWorkingMemorySession(partial = {}) {
   return getWorkingMemorySnapshot();
 }
 
-export function setWorkingMemoryProjectStructure(structure = {}) {
+export function setWorkingMemoryProjectStructure(structure = {}, options = {}) {
   if (!memory.config.include_project_structure) {
     if (!graphIsEmpty(memory.project_structure?.project_graph) || !graphIsEmpty(memory.project_structure?.elements_graph)) {
       memory.project_structure = sanitiseStructure({});
@@ -644,14 +675,35 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
     }
     return getWorkingMemorySnapshot();
   }
+  const scope = normaliseStructureScope(options.scope);
+  const intent = detectStructureIntent(structure);
   const next = sanitiseStructure(structure);
-  if (graphsEqual(memory.project_structure, next)) {
+  const current = sanitiseStructure(memory.project_structure);
+  const hasExplicitGraphs = intent.hasProjectGraph || intent.hasElementsGraph || intent.fallbackGraph;
+  const updateProjectGraph =
+    scope === 'elements'
+      ? false
+      : scope === 'project'
+      ? true
+      : intent.hasProjectGraph || intent.fallbackGraph || !hasExplicitGraphs;
+  const updateElementsGraph =
+    scope === 'project'
+      ? false
+      : scope === 'elements'
+      ? true
+      : intent.hasElementsGraph || !hasExplicitGraphs;
+  const merged = {
+    project_graph: updateProjectGraph ? next.project_graph : current.project_graph,
+    elements_graph: updateElementsGraph ? next.elements_graph : current.elements_graph,
+  };
+  if (graphsEqual(memory.project_structure, merged)) {
     return getWorkingMemorySnapshot();
   }
-  memory.project_structure = next;
+  memory.project_structure = merged;
   updateTimestamp();
   notifyMemory();
-  persistPart('project_structure', next);
+  const persistOptions = scope === 'all' ? null : { scope };
+  persistPart('project_structure', merged, persistOptions);
   return getWorkingMemorySnapshot();
 }
 

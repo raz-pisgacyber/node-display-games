@@ -214,3 +214,10 @@
   - Exposed `/api/working-memory` endpoints plus MCP integrations that compose snapshots from SQL, refresh empty structures from Neo4j, and keep message/working-history parts in sync with tool activity.
   - Rebuilt the browser working-memory module to hydrate from the new backend, drop the legacy localStorage cache, and stream part-specific updates without clobbering other builders.
 - Verification: Not run (no automated test suite available).
+## 2025-11-16 14:20 UTC
+- Files modified: `modules/common/workingMemory.js`, `src/utils/workingMemorySchema.js`, `src/utils/workingMemoryStore.js`.
+- Completed tasks:
+  - Added scope-aware project-structure updates in the browser working-memory store so project and element graphs merge instead of overwriting each other when builders save partial data.
+  - Extended the shared schema helpers with intent detection and merge utilities that preserve untouched graphs while sanitising project-structure payloads.
+  - Taught the MySQL persistence layer to hydrate existing project-structure slices before writes, ensuring partial PATCH requests combine with the stored snapshot rather than wiping peer data.
+- Verification: Not run (no automated test suite available).
