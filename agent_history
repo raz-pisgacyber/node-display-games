@@ -248,3 +248,10 @@
   - Ensured sync operations respect visibility settings, update working memory graphs conditionally, and preserve existing data on partial refreshes.
   - Added debug logging for single-graph updates and guarded sanitisation so partial backend responses merge safely with cached snapshots.
 - Verification: Not run (no automated test suite available).
+
+## 2025-11-23 11:30 UTC
+- Files modified: `modules/common/projectStructure.js`, `agent_history`.
+- Completed tasks:
+  - Added a deterministic builder classifier and isolated cross-graph link tracking so project and element graphs stay independent when rebuilding structures.
+  - Limited edge routing to single-graph writes while recording project↔element connections separately, preventing cross-link mutations from overwriting element graphs.
+- Verification: Not run (no automated test suite available).
