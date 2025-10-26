@@ -6,6 +6,7 @@ const {
   buildDefaultMemory,
   sanitiseWorkingMemoryPart,
   composeWorkingMemory,
+  mergeProjectStructureParts,
 } = require('./workingMemorySchema');
 
 function normalisePartName(part) {
@@ -17,6 +18,30 @@ function normalisePartName(part) {
     return 'last_user_message';
   }
   return trimmed;
+}
+
+function parseJsonPayload(payload) {
+  if (payload === null || payload === undefined) {
+    return null;
+  }
+  if (typeof payload === 'string') {
+    try {
+      return JSON.parse(payload);
+    } catch (error) {
+      return null;
+    }
+  }
+  if (Buffer.isBuffer(payload)) {
+    try {
+      return JSON.parse(payload.toString('utf8'));
+    } catch (error) {
+      return null;
+    }
+  }
+  if (typeof payload === 'object') {
+    return payload;
+  }
+  return null;
 }
 
 async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
@@ -80,7 +105,28 @@ async function saveWorkingMemoryPart({
 
   const existingConnection = connection || (await pool.getConnection());
   try {
-    const sanitised = sanitiseWorkingMemoryPart(name, value, options);
+    let sanitised;
+    if (name === 'project_structure') {
+      let existingValue = null;
+      try {
+        const [rows] = await queryWithLogging(
+          existingConnection,
+          'SELECT payload FROM working_memory_parts WHERE session_id = ? AND part = ?',
+          [sessionId, name]
+        );
+        if (rows.length > 0) {
+          existingValue = parseJsonPayload(rows[0].payload);
+        }
+      } catch (selectError) {
+        console.warn('Failed to load existing project structure for merge', selectError);
+      }
+      sanitised = mergeProjectStructureParts(existingValue, value, {
+        scope: options.scope,
+        source: value,
+      });
+    } else {
+      sanitised = sanitiseWorkingMemoryPart(name, value, options);
+    }
 
     await executeWithLogging(
       existingConnection,

@@ -48,6 +48,13 @@ function safeString(value) {
   return String(value);
 }
 
+function hasOwn(object, key) {
+  if (!object || typeof object !== 'object') {
+    return false;
+  }
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
 function cloneJson(value) {
   if (value === null || value === undefined) {
     return value;
@@ -191,6 +198,30 @@ function sanitiseStructure(structure) {
     project_graph: fallback,
     elements_graph: { nodes: [], edges: [] },
   };
+}
+
+function detectStructureIntent(structure) {
+  if (!structure || typeof structure !== 'object') {
+    return { hasProjectGraph: false, hasElementsGraph: false, fallbackGraph: false };
+  }
+  const hasProjectGraph = hasOwn(structure, 'project_graph');
+  const hasElementsGraph = hasOwn(structure, 'elements_graph');
+  const fallbackGraph =
+    !hasProjectGraph &&
+    !hasElementsGraph &&
+    (Array.isArray(structure.nodes) || Array.isArray(structure.edges));
+  return { hasProjectGraph, hasElementsGraph, fallbackGraph };
+}
+
+function normaliseStructureScope(scope) {
+  if (typeof scope !== 'string') {
+    return 'all';
+  }
+  const trimmed = scope.trim().toLowerCase();
+  if (trimmed === 'project' || trimmed === 'elements') {
+    return trimmed;
+  }
+  return 'all';
 }
 
 function sanitiseNodeContext(context) {
@@ -356,6 +387,30 @@ function sanitiseWorkingMemoryPart(part, value, options = {}) {
   }
 }
 
+function mergeProjectStructureParts(baseValue, incomingValue, { scope, source } = {}) {
+  const base = sanitiseWorkingMemoryPart('project_structure', baseValue);
+  const incoming = sanitiseWorkingMemoryPart('project_structure', incomingValue);
+  const intent = detectStructureIntent(source ?? incomingValue);
+  const hasExplicitGraphs = intent.hasProjectGraph || intent.hasElementsGraph || intent.fallbackGraph;
+  const resolvedScope = normaliseStructureScope(scope);
+  const updateProjectGraph =
+    resolvedScope === 'elements'
+      ? false
+      : resolvedScope === 'project'
+      ? true
+      : intent.hasProjectGraph || intent.fallbackGraph || !hasExplicitGraphs;
+  const updateElementsGraph =
+    resolvedScope === 'project'
+      ? false
+      : resolvedScope === 'elements'
+      ? true
+      : intent.hasElementsGraph || !hasExplicitGraphs;
+  return {
+    project_graph: updateProjectGraph ? incoming.project_graph : base.project_graph,
+    elements_graph: updateElementsGraph ? incoming.elements_graph : base.elements_graph,
+  };
+}
+
 function buildDefaultMemory(overrides = {}) {
   const timestamp = new Date().toISOString();
   const config = sanitiseConfig(overrides.config || DEFAULT_CONFIG);
@@ -425,4 +480,5 @@ module.exports = {
   composeWorkingMemory,
   normaliseWorkingMemory,
   deriveLastUserMessage,
+  mergeProjectStructureParts,
 };
