@@ -55,6 +55,7 @@ refresh only the relevant slice while the server persists each piece:
 
 - `initialiseWorkingMemory({ projectId, sessionId, activeNodeId })`
 - `setWorkingMemorySession(partial)`
+- `setWorkingMemoryProjectGraph(graph)` / `setWorkingMemoryElementsGraph(graph)`
 - `setWorkingMemoryProjectStructure(structure)`
 - `setWorkingMemoryNodeContext(context)`
 - `setWorkingMemoryFetchedContext(context)`

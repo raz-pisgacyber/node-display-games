@@ -185,37 +185,6 @@ function graphsEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function hasOwn(object, key) {
-  if (!object || typeof object !== 'object') {
-    return false;
-  }
-  return Object.prototype.hasOwnProperty.call(object, key);
-}
-
-function normaliseStructureScope(scope) {
-  if (typeof scope !== 'string') {
-    return 'all';
-  }
-  const trimmed = scope.trim().toLowerCase();
-  if (trimmed === 'project' || trimmed === 'elements') {
-    return trimmed;
-  }
-  return 'all';
-}
-
-function detectStructureIntent(structure) {
-  if (!structure || typeof structure !== 'object') {
-    return { hasProjectGraph: false, hasElementsGraph: false, fallbackGraph: false };
-  }
-  const hasProjectGraph = hasOwn(structure, 'project_graph');
-  const hasElementsGraph = hasOwn(structure, 'elements_graph');
-  const fallbackGraph =
-    !hasProjectGraph &&
-    !hasElementsGraph &&
-    (Array.isArray(structure.nodes) || Array.isArray(structure.edges));
-  return { hasProjectGraph, hasElementsGraph, fallbackGraph };
-}
-
 function sanitiseStructure(structure) {
   if (!structure || typeof structure !== 'object') {
     return {
@@ -236,10 +205,59 @@ function sanitiseStructure(structure) {
   };
 }
 
+function sanitiseStructureFromParts({ projectGraph, elementsGraph, structure }) {
+  const base = sanitiseStructure(structure);
+  const resolvedProjectGraph =
+    projectGraph === undefined ? base.project_graph : sanitiseGraph(projectGraph);
+  const resolvedElementsGraph =
+    elementsGraph === undefined ? base.elements_graph : sanitiseGraph(elementsGraph);
+  return {
+    project_graph: resolvedProjectGraph,
+    elements_graph: resolvedElementsGraph,
+  };
+}
+
 function graphIsEmpty(graph) {
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   return nodes.length === 0 && edges.length === 0;
+}
+
+function ensureProjectStructure() {
+  if (!memory.project_structure || typeof memory.project_structure !== 'object') {
+    memory.project_structure = sanitiseStructure({});
+  }
+  return memory.project_structure;
+}
+
+function updateGraphPart(graphKey, graphValue, { sanitise = true } = {}) {
+  const structure = ensureProjectStructure();
+  const next = sanitise ? sanitiseGraph(graphValue) : graphValue;
+  const current = structure[graphKey] || { nodes: [], edges: [] };
+  if (graphsEqual(current, next)) {
+    return { changed: false, value: current };
+  }
+  memory.project_structure = { ...structure, [graphKey]: next };
+  return { changed: true, value: next };
+}
+
+function persistGraphPart(graphKey, graphValue) {
+  const partName = graphKey === 'elements_graph' ? 'elements_graph' : 'project_graph';
+  persistPart(partName, graphValue);
+}
+
+function ensureStructureVisibility() {
+  if (memory.config.include_project_structure) {
+    return false;
+  }
+  const hasProject = !graphIsEmpty(memory.project_structure?.project_graph);
+  const hasElements = !graphIsEmpty(memory.project_structure?.elements_graph);
+  if (hasProject || hasElements) {
+    memory.project_structure = sanitiseStructure({});
+    updateTimestamp();
+    notifyMemory();
+  }
+  return true;
 }
 
 function sanitiseNodeContext(context) {
@@ -333,6 +351,11 @@ function buildDefaultMemory(overrides = {}) {
   const lastUserMessage = overrides.last_user_message
     ? safeString(overrides.last_user_message)
     : deriveLastUserMessage(messages);
+  const projectStructure = sanitiseStructureFromParts({
+    projectGraph: overrides.project_graph,
+    elementsGraph: overrides.elements_graph,
+    structure: overrides.project_structure,
+  });
   return {
     session: {
       session_id: safeString(overrides.session?.session_id ?? ''),
@@ -340,7 +363,7 @@ function buildDefaultMemory(overrides = {}) {
       active_node_id: safeString(overrides.session?.active_node_id ?? ''),
       timestamp: overrides.session?.timestamp || timestamp,
     },
-    project_structure: sanitiseStructure(overrides.project_structure),
+    project_structure: projectStructure,
     node_context: sanitiseNodeContext(overrides.node_context),
     fetched_context: sanitiseFetchedContext(overrides.fetched_context),
     working_history: typeof overrides.working_history === 'string' ? overrides.working_history : '',
@@ -374,6 +397,11 @@ function sanitiseMemorySnapshot(snapshot) {
   const lastUserMessage = snapshot.last_user_message
     ? safeString(snapshot.last_user_message)
     : deriveLastUserMessage(messages);
+  const projectStructure = sanitiseStructureFromParts({
+    projectGraph: snapshot.project_graph,
+    elementsGraph: snapshot.elements_graph,
+    structure: snapshot.project_structure ?? base.project_structure,
+  });
   return {
     session: {
       session_id: safeString(session.session_id ?? base.session.session_id),
@@ -383,7 +411,7 @@ function sanitiseMemorySnapshot(snapshot) {
         ? session.timestamp
         : base.session.timestamp,
     },
-    project_structure: sanitiseStructure(snapshot.project_structure ?? base.project_structure),
+    project_structure: projectStructure,
     node_context: sanitiseNodeContext(snapshot.node_context ?? base.node_context),
     fetched_context: sanitiseFetchedContext(snapshot.fetched_context ?? base.fetched_context),
     working_history: typeof snapshot.working_history === 'string' ? snapshot.working_history : '',
@@ -666,44 +694,52 @@ export function setWorkingMemorySession(partial = {}) {
   return getWorkingMemorySnapshot();
 }
 
-export function setWorkingMemoryProjectStructure(structure = {}, options = {}) {
-  if (!memory.config.include_project_structure) {
-    if (!graphIsEmpty(memory.project_structure?.project_graph) || !graphIsEmpty(memory.project_structure?.elements_graph)) {
-      memory.project_structure = sanitiseStructure({});
-      updateTimestamp();
-      notifyMemory();
-    }
+export function setWorkingMemoryProjectGraph(graph = {}) {
+  if (ensureStructureVisibility()) {
     return getWorkingMemorySnapshot();
   }
-  const scope = normaliseStructureScope(options.scope);
-  const intent = detectStructureIntent(structure);
-  const next = sanitiseStructure(structure);
-  const current = sanitiseStructure(memory.project_structure);
-  const hasExplicitGraphs = intent.hasProjectGraph || intent.hasElementsGraph || intent.fallbackGraph;
-  const updateProjectGraph =
-    scope === 'elements'
-      ? false
-      : scope === 'project'
-      ? true
-      : intent.hasProjectGraph || intent.fallbackGraph || !hasExplicitGraphs;
-  const updateElementsGraph =
-    scope === 'project'
-      ? false
-      : scope === 'elements'
-      ? true
-      : intent.hasElementsGraph || !hasExplicitGraphs;
-  const merged = {
-    project_graph: updateProjectGraph ? next.project_graph : current.project_graph,
-    elements_graph: updateElementsGraph ? next.elements_graph : current.elements_graph,
-  };
-  if (graphsEqual(memory.project_structure, merged)) {
+  const { changed, value } = updateGraphPart('project_graph', graph);
+  if (!changed) {
     return getWorkingMemorySnapshot();
   }
-  memory.project_structure = merged;
   updateTimestamp();
   notifyMemory();
-  const persistOptions = scope === 'all' ? null : { scope };
-  persistPart('project_structure', merged, persistOptions);
+  persistGraphPart('project_graph', value);
+  return getWorkingMemorySnapshot();
+}
+
+export function setWorkingMemoryElementsGraph(graph = {}) {
+  if (ensureStructureVisibility()) {
+    return getWorkingMemorySnapshot();
+  }
+  const { changed, value } = updateGraphPart('elements_graph', graph);
+  if (!changed) {
+    return getWorkingMemorySnapshot();
+  }
+  updateTimestamp();
+  notifyMemory();
+  persistGraphPart('elements_graph', value);
+  return getWorkingMemorySnapshot();
+}
+
+export function setWorkingMemoryProjectStructure(structure = {}) {
+  if (ensureStructureVisibility()) {
+    return getWorkingMemorySnapshot();
+  }
+  const sanitised = sanitiseStructure(structure);
+  const projectUpdate = updateGraphPart('project_graph', sanitised.project_graph, { sanitise: false });
+  const elementsUpdate = updateGraphPart('elements_graph', sanitised.elements_graph, { sanitise: false });
+  if (!projectUpdate.changed && !elementsUpdate.changed) {
+    return getWorkingMemorySnapshot();
+  }
+  updateTimestamp();
+  notifyMemory();
+  if (projectUpdate.changed) {
+    persistGraphPart('project_graph', projectUpdate.value);
+  }
+  if (elementsUpdate.changed) {
+    persistGraphPart('elements_graph', elementsUpdate.value);
+  }
   return getWorkingMemorySnapshot();
 }
 

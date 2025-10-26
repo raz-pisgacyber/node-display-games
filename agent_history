@@ -221,3 +221,10 @@
   - Extended the shared schema helpers with intent detection and merge utilities that preserve untouched graphs while sanitising project-structure payloads.
   - Taught the MySQL persistence layer to hydrate existing project-structure slices before writes, ensuring partial PATCH requests combine with the stored snapshot rather than wiping peer data.
 - Verification: Not run (no automated test suite available).
+## 2025-11-18 10:30 UTC
+- Files modified: `agent.md`, `mcp/index.js`, `modules/common/projectStructureService.js`, `modules/common/workingMemory.js`, `modules/main/main.js`, `src/utils/workingMemorySchema.js`, `src/utils/workingMemoryStore.js`.
+- Completed tasks:
+  - Split project and element working-memory persistence into dedicated `project_graph` and `elements_graph` parts while keeping `project_structure` as a derived composite in the shared schema helpers.
+  - Simplified the MySQL store so each graph write replaces its JSON payload directly and legacy `project_structure` saves are fanned out to the new parts for backward compatibility.
+  - Updated the browser working-memory store, project structure service, main builder, and MCP integration to use graph-specific setters, preventing builder switches from overwriting unrelated graph data.
+- Verification: Not run (no automated test suite available).

@@ -854,8 +854,14 @@ async function runGetWorkingMemory(memory) {
           await saveWorkingMemoryPart({
             sessionId,
             projectId,
-            part: 'project_structure',
-            value: structure,
+            part: 'project_graph',
+            value: structure.project_graph,
+          });
+          await saveWorkingMemoryPart({
+            sessionId,
+            projectId,
+            part: 'elements_graph',
+            value: structure.elements_graph,
           });
         } catch (structureError) {
           console.warn('Failed to refresh project structure for working memory', structureError);

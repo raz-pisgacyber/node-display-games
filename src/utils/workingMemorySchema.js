@@ -8,6 +8,8 @@ const DEFAULT_CONFIG = {
 
 const WORKING_MEMORY_PARTS = new Set([
   'session',
+  'project_graph',
+  'elements_graph',
   'project_structure',
   'node_context',
   'fetched_context',
@@ -16,6 +18,8 @@ const WORKING_MEMORY_PARTS = new Set([
   'last_user_message',
   'config',
 ]);
+
+const DERIVED_WORKING_MEMORY_PARTS = new Set(['project_structure']);
 
 const MAX_HISTORY_LENGTH = 200;
 const MAX_AUTO_REFRESH_INTERVAL = 600;
@@ -46,13 +50,6 @@ function safeString(value) {
     return '';
   }
   return String(value);
-}
-
-function hasOwn(object, key) {
-  if (!object || typeof object !== 'object') {
-    return false;
-  }
-  return Object.prototype.hasOwnProperty.call(object, key);
 }
 
 function cloneJson(value) {
@@ -200,28 +197,16 @@ function sanitiseStructure(structure) {
   };
 }
 
-function detectStructureIntent(structure) {
-  if (!structure || typeof structure !== 'object') {
-    return { hasProjectGraph: false, hasElementsGraph: false, fallbackGraph: false };
-  }
-  const hasProjectGraph = hasOwn(structure, 'project_graph');
-  const hasElementsGraph = hasOwn(structure, 'elements_graph');
-  const fallbackGraph =
-    !hasProjectGraph &&
-    !hasElementsGraph &&
-    (Array.isArray(structure.nodes) || Array.isArray(structure.edges));
-  return { hasProjectGraph, hasElementsGraph, fallbackGraph };
-}
-
-function normaliseStructureScope(scope) {
-  if (typeof scope !== 'string') {
-    return 'all';
-  }
-  const trimmed = scope.trim().toLowerCase();
-  if (trimmed === 'project' || trimmed === 'elements') {
-    return trimmed;
-  }
-  return 'all';
+function sanitiseStructureFromParts({ projectGraph, elementsGraph, structure }) {
+  const base = sanitiseStructure(structure);
+  const resolvedProjectGraph =
+    projectGraph === undefined ? base.project_graph : sanitiseGraph(projectGraph);
+  const resolvedElementsGraph =
+    elementsGraph === undefined ? base.elements_graph : sanitiseGraph(elementsGraph);
+  return {
+    project_graph: resolvedProjectGraph,
+    elements_graph: resolvedElementsGraph,
+  };
 }
 
 function sanitiseNodeContext(context) {
@@ -368,6 +353,10 @@ function sanitiseWorkingMemoryPart(part, value, options = {}) {
   switch (part) {
     case 'session':
       return sanitiseSession(value);
+    case 'project_graph':
+      return sanitiseGraph(value);
+    case 'elements_graph':
+      return sanitiseGraph(value);
     case 'project_structure':
       return sanitiseStructure(value);
     case 'node_context':
@@ -387,33 +376,14 @@ function sanitiseWorkingMemoryPart(part, value, options = {}) {
   }
 }
 
-function mergeProjectStructureParts(baseValue, incomingValue, { scope, source } = {}) {
-  const base = sanitiseWorkingMemoryPart('project_structure', baseValue);
-  const incoming = sanitiseWorkingMemoryPart('project_structure', incomingValue);
-  const intent = detectStructureIntent(source ?? incomingValue);
-  const hasExplicitGraphs = intent.hasProjectGraph || intent.hasElementsGraph || intent.fallbackGraph;
-  const resolvedScope = normaliseStructureScope(scope);
-  const updateProjectGraph =
-    resolvedScope === 'elements'
-      ? false
-      : resolvedScope === 'project'
-      ? true
-      : intent.hasProjectGraph || intent.fallbackGraph || !hasExplicitGraphs;
-  const updateElementsGraph =
-    resolvedScope === 'project'
-      ? false
-      : resolvedScope === 'elements'
-      ? true
-      : intent.hasElementsGraph || !hasExplicitGraphs;
-  return {
-    project_graph: updateProjectGraph ? incoming.project_graph : base.project_graph,
-    elements_graph: updateElementsGraph ? incoming.elements_graph : base.elements_graph,
-  };
-}
-
 function buildDefaultMemory(overrides = {}) {
   const timestamp = new Date().toISOString();
   const config = sanitiseConfig(overrides.config || DEFAULT_CONFIG);
+  const structure = sanitiseStructureFromParts({
+    projectGraph: overrides.project_graph,
+    elementsGraph: overrides.elements_graph,
+    structure: overrides.project_structure,
+  });
   return {
     session: {
       session_id: '',
@@ -421,7 +391,7 @@ function buildDefaultMemory(overrides = {}) {
       active_node_id: '',
       timestamp,
     },
-    project_structure: sanitiseStructure(overrides.project_structure),
+    project_structure: structure,
     node_context: sanitiseNodeContext(overrides.node_context),
     fetched_context: sanitiseFetchedContext(overrides.fetched_context),
     working_history: sanitiseWorkingHistory(overrides.working_history),
@@ -439,7 +409,11 @@ function composeWorkingMemory(parts = {}) {
   const config = sanitiseConfig(incomingConfig);
 
   const session = sanitiseSession({ ...defaults.session, ...ensureObject(parts.session) });
-  const projectStructure = sanitiseStructure(parts.project_structure || defaults.project_structure);
+  const projectStructure = sanitiseStructureFromParts({
+    projectGraph: parts.project_graph,
+    elementsGraph: parts.elements_graph,
+    structure: parts.project_structure || defaults.project_structure,
+  });
   const nodeContext = sanitiseNodeContext(parts.node_context || defaults.node_context);
   const fetchedContext = sanitiseFetchedContext(parts.fetched_context || defaults.fetched_context);
   const workingHistory = sanitiseWorkingHistory(parts.working_history || defaults.working_history);
@@ -474,11 +448,11 @@ function normaliseWorkingMemory(memory) {
 module.exports = {
   DEFAULT_CONFIG,
   WORKING_MEMORY_PARTS,
+  DERIVED_WORKING_MEMORY_PARTS,
   MAX_HISTORY_LENGTH,
   buildDefaultMemory,
   sanitiseWorkingMemoryPart,
   composeWorkingMemory,
   normaliseWorkingMemory,
   deriveLastUserMessage,
-  mergeProjectStructureParts,
 };

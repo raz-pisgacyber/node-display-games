@@ -1,7 +1,8 @@
 import {
   initialiseWorkingMemory,
   setWorkingMemorySession,
-  setWorkingMemoryProjectStructure,
+  setWorkingMemoryProjectGraph,
+  setWorkingMemoryElementsGraph,
   setWorkingMemoryNodeContext,
   setWorkingMemoryMessages,
   setWorkingMemoryWorkingHistory,
@@ -319,7 +320,8 @@ function syncWorkingMemoryProjectStructure() {
   if (state.projectId) {
     setWorkingMemorySession({ project_id: state.projectId });
   }
-  setWorkingMemoryProjectStructure(payload);
+  setWorkingMemoryProjectGraph(payload.project_graph);
+  setWorkingMemoryElementsGraph(payload.elements_graph);
 }
 
 function buildNodeContextPayload() {
@@ -380,10 +382,8 @@ function syncWorkingMemoryWorkingHistory() {
 
 function resetWorkingMemoryForProject(projectId) {
   initialiseWorkingMemory({ projectId });
-  setWorkingMemoryProjectStructure({
-    project_graph: { nodes: [], edges: [] },
-    elements_graph: { nodes: [], edges: [] },
-  });
+  setWorkingMemoryProjectGraph({ nodes: [], edges: [] });
+  setWorkingMemoryElementsGraph({ nodes: [], edges: [] });
   setWorkingMemoryNodeContext({});
   setWorkingMemoryMessages([]);
   setWorkingMemoryWorkingHistory('');
