@@ -19,6 +19,7 @@ const {
   saveWorkingMemoryPart,
   WORKING_MEMORY_PARTS,
 } = require('../utils/workingMemoryStore');
+const { buildStructureFromGraph } = require('../utils/projectStructure');
 const router = express.Router();
 
 function ensureObject(value) {
@@ -212,8 +213,7 @@ router.post('/project', async (req, res, next) => {
   }
 });
 
-router.get('/graph', async (req, res, next) => {
-  const projectId = (req.query?.project_id || config.defaults.projectId).toString();
+async function fetchProjectGraph(projectId) {
   const session = getWriteSession();
   try {
     const result = await session.run(
@@ -244,11 +244,42 @@ router.get('/graph', async (req, res, next) => {
         props: edge.props || {},
         project_id: projectId,
       }));
-    res.json({ nodes, edges });
-  } catch (error) {
-    next(error);
+    return { nodes, edges };
   } finally {
     await session.close();
+  }
+}
+
+function respondWithGraph(res, payload, projectId) {
+  const structure = buildStructureFromGraph(payload.nodes, payload.edges);
+  res.json({
+    nodes: payload.nodes,
+    edges: payload.edges,
+    project_graph: structure.project_graph,
+    elements_graph: structure.elements_graph,
+    cross_links: structure.cross_links,
+    project_id: projectId,
+  });
+}
+
+router.get('/graph', async (req, res, next) => {
+  const projectId = (req.query?.project_id || config.defaults.projectId).toString();
+  try {
+    const payload = await fetchProjectGraph(projectId);
+    respondWithGraph(res, payload, projectId);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/graph/:projectId', async (req, res, next) => {
+  const { projectId: rawProjectId } = req.params;
+  const projectId = (rawProjectId || config.defaults.projectId).toString();
+  try {
+    const payload = await fetchProjectGraph(projectId);
+    respondWithGraph(res, payload, projectId);
+  } catch (error) {
+    next(error);
   }
 });
 

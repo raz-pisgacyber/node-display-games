@@ -57,8 +57,13 @@ function withProjectId(payload, projectId) {
 }
 
 export async function fetchGraph(projectId) {
-  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-  return fetchJSON(`/api/graph${query}`);
+  if (projectId !== undefined && projectId !== null) {
+    const value = `${projectId}`.trim();
+    if (value) {
+      return fetchJSON(`/api/graph/${encodeURIComponent(value)}`);
+    }
+  }
+  return fetchJSON('/api/graph');
 }
 
 export async function createNode(payload, { projectId, keepalive } = {}) {
