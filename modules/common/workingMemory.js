@@ -273,10 +273,6 @@ function persistGraphPart(graphKey, graphValue) {
   persistPart(partName, graphValue);
 }
 
-function ensureStructureVisibility() {
-  return !memory.config.include_project_structure;
-}
-
 function sanitiseNodeContext(context) {
   if (!context || typeof context !== 'object') {
     return {};
@@ -481,6 +477,35 @@ function thawHiddenProjectStructure() {
   hiddenProjectStructureFrozen = false;
 }
 
+function getHiddenStructureSnapshot() {
+  return sanitiseStructure(hiddenProjectStructure);
+}
+
+function updateHiddenGraphPart(graphKey, graphValue) {
+  const previous = getHiddenStructureSnapshot();
+  const sanitised = sanitiseGraph(graphValue);
+  const merged = mergeProjectStructureParts(previous, { [graphKey]: sanitised });
+  const previousGraph = previous[graphKey] || { nodes: [], edges: [] };
+  const nextGraph = merged[graphKey] || { nodes: [], edges: [] };
+  const changed = !graphsEqual(previousGraph, nextGraph);
+  hiddenProjectStructure = merged;
+  return { changed, value: nextGraph };
+}
+
+function updateHiddenStructureSnapshot(structure) {
+  const previous = getHiddenStructureSnapshot();
+  const sanitised = sanitiseStructure(structure, previous);
+  const merged = mergeProjectStructureParts(previous, sanitised);
+  const changedProject = !graphsEqual(previous.project_graph, merged.project_graph);
+  const changedElements = !graphsEqual(previous.elements_graph, merged.elements_graph);
+  hiddenProjectStructure = merged;
+  return {
+    changedProject,
+    changedElements,
+    value: merged,
+  };
+}
+
 function updateTimestamp() {
   memory.session.timestamp = new Date().toISOString();
 }
@@ -579,15 +604,13 @@ function ensureSessionLoaded(sessionId, projectId, overrides = {}) {
 
 function buildNodeScopedSnapshot(snapshot, nodeId) {
   const scoped = cloneJson(snapshot);
+  const structure = sanitiseStructure(snapshot.project_structure || {});
+  const fallbackStructure = cloneJson(structure);
   const targetId = nodeId ? safeString(nodeId) : scoped.session?.active_node_id || '';
   if (!targetId) {
-    scoped.project_structure = sanitiseStructure({});
-    scoped.node_context = {};
-    scoped.messages = [];
-    scoped.last_user_message = '';
+    scoped.project_structure = fallbackStructure;
     return scoped;
   }
-  const structure = sanitiseStructure(snapshot.project_structure || {});
   const projectNodes = Array.isArray(structure.project_graph?.nodes)
     ? structure.project_graph.nodes
     : [];
@@ -606,6 +629,11 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
 
   const hasProjectNode = projectNodes.some((node) => node.id === targetId);
   const hasElementNode = elementNodes.some((node) => node.id === targetId);
+
+  if (!hasProjectNode && !hasElementNode) {
+    scoped.project_structure = fallbackStructure;
+    return scoped;
+  }
 
   if (hasProjectNode) {
     projectEdges.forEach((edge) => {
@@ -632,20 +660,22 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
   const filterNodes = (list, set) =>
     list.filter((node) => node.id === targetId || set.has(node.id));
 
-  scoped.project_structure = {
-    project_graph: {
-      nodes: hasProjectNode ? filterNodes(projectNodes, projectNodeIds) : [],
-      edges: hasProjectNode
-        ? projectEdges.filter((edge) => edge.from === targetId || edge.to === targetId)
-        : [],
-    },
-    elements_graph: {
-      nodes: hasElementNode ? filterNodes(elementNodes, elementNodeIds) : [],
-      edges: hasElementNode
-        ? elementEdges.filter((edge) => edge.from === targetId || edge.to === targetId)
-        : [],
-    },
+  const scopedStructure = {
+    project_graph: hasProjectNode
+      ? {
+          nodes: filterNodes(projectNodes, projectNodeIds),
+          edges: projectEdges.filter((edge) => edge.from === targetId || edge.to === targetId),
+        }
+      : fallbackStructure.project_graph,
+    elements_graph: hasElementNode
+      ? {
+          nodes: filterNodes(elementNodes, elementNodeIds),
+          edges: elementEdges.filter((edge) => edge.from === targetId || edge.to === targetId),
+        }
+      : fallbackStructure.elements_graph,
   };
+
+  scoped.project_structure = scopedStructure;
   scoped.messages = Array.isArray(snapshot.messages)
     ? snapshot.messages.filter((message) => !message.node_id || message.node_id === targetId)
     : [];
@@ -744,7 +774,15 @@ export function setWorkingMemorySession(partial = {}) {
 }
 
 export function setWorkingMemoryProjectGraph(graph = {}) {
-  if (ensureStructureVisibility()) {
+  const includeStructure = memory.config.include_project_structure !== false;
+  if (!includeStructure) {
+    const { changed, value } = updateHiddenGraphPart('project_graph', graph);
+    if (!changed) {
+      return getWorkingMemorySnapshot();
+    }
+    updateTimestamp();
+    notifyMemory();
+    persistGraphPart('project_graph', value);
     return getWorkingMemorySnapshot();
   }
   const { changed, value } = updateGraphPart('project_graph', graph);
@@ -758,7 +796,15 @@ export function setWorkingMemoryProjectGraph(graph = {}) {
 }
 
 export function setWorkingMemoryElementsGraph(graph = {}) {
-  if (ensureStructureVisibility()) {
+  const includeStructure = memory.config.include_project_structure !== false;
+  if (!includeStructure) {
+    const { changed, value } = updateHiddenGraphPart('elements_graph', graph);
+    if (!changed) {
+      return getWorkingMemorySnapshot();
+    }
+    updateTimestamp();
+    notifyMemory();
+    persistGraphPart('elements_graph', value);
     return getWorkingMemorySnapshot();
   }
   const { changed, value } = updateGraphPart('elements_graph', graph);
@@ -772,7 +818,20 @@ export function setWorkingMemoryElementsGraph(graph = {}) {
 }
 
 export function setWorkingMemoryProjectStructure(structure = {}) {
-  if (ensureStructureVisibility()) {
+  const includeStructure = memory.config.include_project_structure !== false;
+  if (!includeStructure) {
+    const { changedProject, changedElements, value } = updateHiddenStructureSnapshot(structure);
+    if (!changedProject && !changedElements) {
+      return getWorkingMemorySnapshot();
+    }
+    updateTimestamp();
+    notifyMemory();
+    if (changedProject) {
+      persistGraphPart('project_graph', value.project_graph);
+    }
+    if (changedElements) {
+      persistGraphPart('elements_graph', value.elements_graph);
+    }
     return getWorkingMemorySnapshot();
   }
   const current = ensureProjectStructure();
@@ -867,6 +926,13 @@ export function setWorkingMemoryWorkingHistory(value) {
 
 export function getWorkingMemorySettings() {
   return { ...memory.config };
+}
+
+export function ensureProjectStructureIncluded() {
+  if (memory.config.include_project_structure) {
+    return getWorkingMemorySettings();
+  }
+  return updateWorkingMemorySettings({ include_project_structure: true });
 }
 
 export function updateWorkingMemorySettings(partial = {}) {

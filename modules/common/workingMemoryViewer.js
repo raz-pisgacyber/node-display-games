@@ -9,6 +9,17 @@ const viewerState = {
   options: {},
 };
 
+function normaliseViewerOptions(options = {}) {
+  if (!options || typeof options !== 'object') {
+    return {};
+  }
+  const nodeId = options.nodeId !== undefined && options.nodeId !== null ? String(options.nodeId) : '';
+  if (options.nodeOnly && nodeId.trim()) {
+    return { nodeOnly: true, nodeId: nodeId.trim() };
+  }
+  return {};
+}
+
 function ensureViewer() {
   if (viewerState.overlay) {
     return viewerState;
@@ -80,11 +91,12 @@ function ensureViewer() {
 }
 
 export function openWorkingMemoryViewer(options = {}) {
+  const resolvedOptions = normaliseViewerOptions(options);
   const { overlay, modal } = ensureViewer();
   if (!overlay || !modal) {
     return;
   }
-  viewerState.options = { ...options };
+  viewerState.options = { ...resolvedOptions };
   if (viewerState.content) {
     viewerState.content.textContent = serialiseWorkingMemory(viewerState.options);
   }

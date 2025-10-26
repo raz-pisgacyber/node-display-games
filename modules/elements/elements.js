@@ -7,6 +7,7 @@ import { fetchGraph, createNode, createCheckpoint } from '../common/api.js';
 import buildStructureFromGraph from '../common/projectStructure.js';
 import {
   initialiseWorkingMemory,
+  ensureProjectStructureIncluded,
   setWorkingMemoryNodeContext,
   setWorkingMemorySession,
 } from '../common/workingMemory.js';
@@ -508,6 +509,7 @@ const init = async (projectId) => {
 
   state.projectId = projectId || null;
   initialiseWorkingMemory({ projectId: state.projectId });
+  ensureProjectStructureIncluded();
   setWorkingMemorySession({ project_id: state.projectId || '' });
   state.statusDot = document.querySelector('[data-status-dot]');
   state.statusLabel = document.querySelector('[data-status-label]');
@@ -687,9 +689,13 @@ const init = async (projectId) => {
       if (lastNode && (!state.projectId || lastNode.projectId === state.projectId)) {
         syncWorkingMemoryNode(lastNode, state.projectId);
       }
-      const activeId = lastNode?.id || '';
+      const activeId = lastNode?.id ? String(lastNode.id) : '';
       setWorkingMemorySession({ project_id: state.projectId || '', active_node_id: activeId });
-      openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeId });
+      if (activeId) {
+        openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeId });
+      } else {
+        openWorkingMemoryViewer();
+      }
     });
   }
 

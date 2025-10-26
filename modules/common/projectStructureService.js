@@ -188,13 +188,11 @@ function applySnapshotToWorkingMemory(projectId, structure, includeStructure) {
 
   setWorkingMemorySession({ project_id: projectId || '' });
 
-  if (includeStructure) {
-    if (Object.prototype.hasOwnProperty.call(snapshot, 'project_graph')) {
-      setWorkingMemoryProjectGraph(snapshot.project_graph);
-    }
-    if (Object.prototype.hasOwnProperty.call(snapshot, 'elements_graph')) {
-      setWorkingMemoryElementsGraph(snapshot.elements_graph);
-    }
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'project_graph')) {
+    setWorkingMemoryProjectGraph(snapshot.project_graph);
+  }
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'elements_graph')) {
+    setWorkingMemoryElementsGraph(snapshot.elements_graph);
   }
 
   return cloneStructure(snapshot);
@@ -250,18 +248,23 @@ export async function syncProjectStructureToWorkingMemory(
   { force = false, structure } = {}
 ) {
   const includeStructure = shouldLoadStructure();
+  const needsBootstrap = !cache.project_graph && !cache.elements_graph;
   if (structure) {
     return applySnapshotToWorkingMemory(projectId, structure, includeStructure);
   }
 
   let resolvedStructure;
-  if (includeStructure || force) {
+  if (includeStructure || force || needsBootstrap) {
     resolvedStructure = await getProjectStructureSnapshot(projectId, { force });
   } else {
     resolvedStructure = getCachedStructureSnapshot();
   }
 
-  return applySnapshotToWorkingMemory(projectId, resolvedStructure, includeStructure);
+  return applySnapshotToWorkingMemory(
+    projectId,
+    resolvedStructure,
+    includeStructure || needsBootstrap
+  );
 }
 
 export async function rebuildProjectStructure(projectId, options = {}) {
