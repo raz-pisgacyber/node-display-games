@@ -255,3 +255,11 @@
   - Added a deterministic builder classifier and isolated cross-graph link tracking so project and element graphs stay independent when rebuilding structures.
   - Limited edge routing to single-graph writes while recording project↔element connections separately, preventing cross-link mutations from overwriting element graphs.
 - Verification: Not run (no automated test suite available).
+
+## 2025-11-24 12:00 UTC
+- Files modified: `AGENTS.md`, `agent_history`, `modules/common/autosaveManager.js`, `src/routes/api.js`.
+- Completed tasks:
+  - Updated the autosave manager to send granular `metaUpdates` payloads and avoid server-side meta replacements when persisting nodes.
+  - Added a deep-merge helper for node meta updates and conflict detection that blocks replacements dropping project or element metadata.
+  - Ensured meta updates continue to refresh local node state with server responses while skipping empty PATCH requests.
+- Verification: Not run (no automated test suite available).
