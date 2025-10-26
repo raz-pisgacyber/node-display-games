@@ -34,6 +34,21 @@ function sanitiseMeta(meta) {
   return serialiseMeta(normaliseMeta(meta));
 }
 
+function deepMergeMeta(baseValue, updateValue) {
+  if (Array.isArray(updateValue)) {
+    return updateValue.slice();
+  }
+  if (updateValue && typeof updateValue === 'object' && !Array.isArray(updateValue)) {
+    const source = baseValue && typeof baseValue === 'object' && !Array.isArray(baseValue) ? baseValue : {};
+    const result = { ...source };
+    for (const key of Object.keys(updateValue)) {
+      result[key] = deepMergeMeta(source[key], updateValue[key]);
+    }
+    return result;
+  }
+  return updateValue === undefined ? baseValue : updateValue;
+}
+
 function generateCheckpointName(date = new Date()) {
   const fallback = new Date();
   const source = date instanceof Date && !Number.isNaN(date.getTime()) ? date : fallback;
@@ -327,7 +342,18 @@ router.patch('/node/:id', async (req, res, next) => {
         queryParts.push('SET n += $core');
       }
       if (hasMetaReplace || hasMetaUpdates) {
-        const mergedMeta = hasMetaReplace ? { ...metaReplaceObject } : { ...existingNode.meta, ...metaUpdateObject };
+        const existingMeta = normaliseMeta(existingNode.meta);
+        if (hasMetaReplace) {
+          const incoming = metaReplaceObject || {};
+          const hadProject = Object.prototype.hasOwnProperty.call(existingMeta, 'projectData');
+          const hadElement = Object.prototype.hasOwnProperty.call(existingMeta, 'elementData');
+          const dropsProject = hadProject && !Object.prototype.hasOwnProperty.call(incoming, 'projectData');
+          const dropsElement = hadElement && !Object.prototype.hasOwnProperty.call(incoming, 'elementData');
+          if (dropsProject || dropsElement) {
+            return { conflict: true };
+          }
+        }
+        const mergedMeta = hasMetaReplace ? { ...metaReplaceObject } : deepMergeMeta(existingMeta, metaUpdateObject);
         params.meta = sanitiseMeta(mergedMeta);
         queryParts.push('SET n.meta = $meta');
       }
@@ -336,7 +362,11 @@ router.patch('/node/:id', async (req, res, next) => {
       const updateResult = await tx.run(queryParts.join('\n'), params);
       return { updateResult };
     });
-    if (!result || result.notFound || result.updateResult.records.length === 0) {
+    if (result?.conflict) {
+      res.status(409).json({ error: 'Refusing meta replace that would drop other builder data. Use metaUpdates.' });
+      return;
+    }
+    if (!result || result.notFound || !result.updateResult || result.updateResult.records.length === 0) {
       res.status(404).json({ error: 'Node not found' });
       return;
     }

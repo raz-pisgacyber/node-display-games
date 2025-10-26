@@ -124,3 +124,7 @@ Next steps or handoff notes: Consider debouncing repeated rebuild requests when 
 Summary of work completed: Hardened working-memory schema merging so project and elements graphs persist through partial updates and composeWorkingMemory reuses existing snapshots.
 Key implementation details or architectural notes: Introduced mergeProjectStructureParts helper, taught sanitiseStructureFromParts and sanitiseWorkingMemoryPart to preserve sibling graphs, and updated composeWorkingMemory/loadWorkingMemory to merge incremental graph payloads without wiping data.
 Next steps or handoff notes: Monitor downstream UI updates to ensure they pass existing project_structure when dispatching partial graph changes.
+## [2025-11-24 12:00 UTC] - assistant
+Summary of work completed: Prevented autosave meta payloads from overwriting sibling builder data and hardened the API’s meta merge logic.
+Key implementation details or architectural notes: Updated the browser autosave manager to send `metaUpdates` instead of full `meta` blobs, introduced a deep merge helper on the PATCH /node route, and added conflict detection that rejects meta replacements dropping project or element data.
+Next steps or handoff notes: Monitor future node persistence changes to ensure they continue using partial meta updates and extend deep-merge coverage if new nested branches are introduced.

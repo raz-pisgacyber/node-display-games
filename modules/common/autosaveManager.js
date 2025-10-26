@@ -196,16 +196,25 @@ export default class AutosaveManager {
   }
 
   async processNode(node, { keepalive = false } = {}) {
-    const payload = typeof node.toPersistence === 'function' ? node.toPersistence() : null;
-    if (!payload || !node.id) {
+    const raw = typeof node.toPersistence === 'function' ? node.toPersistence() : null;
+    if (!raw || !node?.id) {
       return;
     }
-    const meta = sanitiseMeta(payload.meta);
-    const body = {
-      label: payload.label,
-      content: payload.content,
-      meta,
-    };
+    const body = {};
+    if (raw.label !== undefined) {
+      body.label = raw.label;
+    }
+    if (raw.content !== undefined) {
+      body.content = raw.content;
+    }
+    const metaUpdates = sanitiseMeta(raw.meta);
+    if (Object.keys(metaUpdates).length > 0) {
+      // Critical: sending `meta` triggers a server-side replace. `metaUpdates` performs a merge instead.
+      body.metaUpdates = metaUpdates;
+    }
+    if (!Object.keys(body).length) {
+      return;
+    }
     const response = await updateNode(node.id, body, { projectId: this.projectId, keepalive });
     if (response && typeof response === 'object') {
       if (response.meta) {
