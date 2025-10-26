@@ -95,7 +95,7 @@ async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
       ...(parts.session || {}),
       session_id: sessionId,
     };
-    const memory = composeWorkingMemory(parts);
+    const memory = composeWorkingMemory(parts, parts);
     return { memory, parts };
   } finally {
     if (!connection) {
