@@ -185,60 +185,87 @@ function graphsEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function sanitiseStructure(structure) {
+function sanitiseStructure(structure, fallback = null) {
+  const base = fallback && typeof fallback === 'object'
+    ? {
+        project_graph: sanitiseGraph(fallback.project_graph),
+        elements_graph: sanitiseGraph(fallback.elements_graph),
+      }
+    : {
+        project_graph: sanitiseGraph(),
+        elements_graph: sanitiseGraph(),
+      };
   if (!structure || typeof structure !== 'object') {
+    return base;
+  }
+  const hasProjectGraph = Object.prototype.hasOwnProperty.call(structure, 'project_graph');
+  const hasElementsGraph = Object.prototype.hasOwnProperty.call(structure, 'elements_graph');
+  if (hasProjectGraph || hasElementsGraph) {
     return {
-      project_graph: { nodes: [], edges: [] },
-      elements_graph: { nodes: [], edges: [] },
+      project_graph: hasProjectGraph ? sanitiseGraph(structure.project_graph) : base.project_graph,
+      elements_graph: hasElementsGraph
+        ? sanitiseGraph(structure.elements_graph)
+        : base.elements_graph,
     };
   }
-  if (structure.project_graph || structure.elements_graph) {
-    return {
-      project_graph: sanitiseGraph(structure.project_graph),
-      elements_graph: sanitiseGraph(structure.elements_graph),
-    };
-  }
-  const fallback = sanitiseGraph(structure);
+  const fallbackGraph = sanitiseGraph(structure);
   return {
-    project_graph: fallback,
-    elements_graph: { nodes: [], edges: [] },
+    project_graph: fallbackGraph,
+    elements_graph: base.elements_graph,
   };
 }
 
-function sanitiseStructureFromParts({ projectGraph, elementsGraph, structure }) {
-  const base = sanitiseStructure(structure);
+function mergeProjectStructureParts(current, next) {
+  const base = sanitiseStructure(current);
+  if (!next || typeof next !== 'object') {
+    return base;
+  }
+  const hasProjectGraph = Object.prototype.hasOwnProperty.call(next, 'project_graph');
+  const hasElementsGraph = Object.prototype.hasOwnProperty.call(next, 'elements_graph');
+  if (hasProjectGraph || hasElementsGraph) {
+    return {
+      project_graph: hasProjectGraph ? sanitiseGraph(next.project_graph) : base.project_graph,
+      elements_graph: hasElementsGraph ? sanitiseGraph(next.elements_graph) : base.elements_graph,
+    };
+  }
+  const fallbackGraph = sanitiseGraph(next);
+  return {
+    project_graph: fallbackGraph,
+    elements_graph: base.elements_graph,
+  };
+}
+
+function sanitiseStructureFromParts({ projectGraph, elementsGraph, structure, current }) {
+  const mergedStructure = mergeProjectStructureParts(current, structure);
   const resolvedProjectGraph =
-    projectGraph === undefined ? base.project_graph : sanitiseGraph(projectGraph);
+    projectGraph === undefined ? mergedStructure.project_graph : sanitiseGraph(projectGraph);
   const resolvedElementsGraph =
-    elementsGraph === undefined ? base.elements_graph : sanitiseGraph(elementsGraph);
+    elementsGraph === undefined ? mergedStructure.elements_graph : sanitiseGraph(elementsGraph);
   return {
     project_graph: resolvedProjectGraph,
     elements_graph: resolvedElementsGraph,
   };
 }
 
-function graphIsEmpty(graph) {
-  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
-  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  return nodes.length === 0 && edges.length === 0;
-}
-
 function ensureProjectStructure() {
   if (!memory.project_structure || typeof memory.project_structure !== 'object') {
     memory.project_structure = sanitiseStructure({});
+  } else {
+    memory.project_structure = sanitiseStructure(memory.project_structure);
   }
   return memory.project_structure;
 }
 
 function updateGraphPart(graphKey, graphValue, { sanitise = true } = {}) {
   const structure = ensureProjectStructure();
-  const next = sanitise ? sanitiseGraph(graphValue) : graphValue;
+  const next = sanitise ? sanitiseGraph(graphValue) : cloneJson(graphValue);
+  const resolved = sanitise ? next : sanitiseGraph(next);
   const current = structure[graphKey] || { nodes: [], edges: [] };
-  if (graphsEqual(current, next)) {
+  if (graphsEqual(current, resolved)) {
     return { changed: false, value: current };
   }
-  memory.project_structure = { ...structure, [graphKey]: next };
-  return { changed: true, value: next };
+  structure[graphKey] = resolved;
+  return { changed: true, value: structure[graphKey] };
 }
 
 function persistGraphPart(graphKey, graphValue) {
@@ -247,17 +274,7 @@ function persistGraphPart(graphKey, graphValue) {
 }
 
 function ensureStructureVisibility() {
-  if (memory.config.include_project_structure) {
-    return false;
-  }
-  const hasProject = !graphIsEmpty(memory.project_structure?.project_graph);
-  const hasElements = !graphIsEmpty(memory.project_structure?.elements_graph);
-  if (hasProject || hasElements) {
-    memory.project_structure = sanitiseStructure({});
-    updateTimestamp();
-    notifyMemory();
-  }
-  return true;
+  return !memory.config.include_project_structure;
 }
 
 function sanitiseNodeContext(context) {
@@ -355,6 +372,7 @@ function buildDefaultMemory(overrides = {}) {
     projectGraph: overrides.project_graph,
     elementsGraph: overrides.elements_graph,
     structure: overrides.project_structure,
+    current: overrides.project_structure,
   });
   return {
     session: {
@@ -373,8 +391,9 @@ function buildDefaultMemory(overrides = {}) {
   };
 }
 
-function sanitiseMemorySnapshot(snapshot) {
-  const base = buildDefaultMemory();
+function sanitiseMemorySnapshot(snapshot, currentMemory = null) {
+  const base =
+    currentMemory && typeof currentMemory === 'object' ? cloneJson(currentMemory) : buildDefaultMemory();
   if (!snapshot || typeof snapshot !== 'object') {
     return base;
   }
@@ -401,6 +420,7 @@ function sanitiseMemorySnapshot(snapshot) {
     projectGraph: snapshot.project_graph,
     elementsGraph: snapshot.elements_graph,
     structure: snapshot.project_structure ?? base.project_structure,
+    current: base.project_structure,
   });
   return {
     session: {
@@ -423,7 +443,16 @@ function sanitiseMemorySnapshot(snapshot) {
 
 function applyConfigVisibility(target) {
   if (!target.config.include_project_structure) {
+    if (!hiddenProjectStructureFrozen) {
+      hiddenProjectStructure = mergeProjectStructureParts(hiddenProjectStructure, target.project_structure);
+      hiddenProjectStructureFrozen = true;
+    }
     target.project_structure = sanitiseStructure({});
+  } else if (hiddenProjectStructure) {
+    target.project_structure = mergeProjectStructureParts(target.project_structure, hiddenProjectStructure);
+    resetHiddenProjectStructure();
+  } else {
+    hiddenProjectStructureFrozen = false;
   }
   if (!target.config.include_context) {
     target.node_context = {};
@@ -439,7 +468,18 @@ const memoryListeners = new Set();
 const settingsListeners = new Set();
 
 let memory = buildDefaultMemory();
+let hiddenProjectStructure = null;
+let hiddenProjectStructureFrozen = false;
 let pendingLoad = null;
+
+function resetHiddenProjectStructure() {
+  hiddenProjectStructure = null;
+  hiddenProjectStructureFrozen = false;
+}
+
+function thawHiddenProjectStructure() {
+  hiddenProjectStructureFrozen = false;
+}
 
 function updateTimestamp() {
   memory.session.timestamp = new Date().toISOString();
@@ -498,7 +538,11 @@ async function loadMemoryFromServer(sessionId, projectId, overrides = {}) {
   }
   try {
     const data = await fetchJSON(`/api/working-memory?${params.toString()}`);
-    const next = sanitiseMemorySnapshot(data?.memory);
+    thawHiddenProjectStructure();
+    const fallbackMemory = hiddenProjectStructure
+      ? { ...memory, project_structure: mergeProjectStructureParts(memory.project_structure, hiddenProjectStructure) }
+      : memory;
+    const next = sanitiseMemorySnapshot(data?.memory, fallbackMemory);
     memory = next;
     memory.session.session_id = sessionId;
     if (projectId) {
@@ -631,6 +675,7 @@ export function serialiseWorkingMemory(options = {}) {
 
 export function initialiseWorkingMemory({ projectId, sessionId, activeNodeId } = {}) {
   memory = buildDefaultMemory();
+  resetHiddenProjectStructure();
   if (projectId !== undefined) {
     memory.session.project_id = safeString(projectId);
   }
@@ -655,6 +700,7 @@ export function initialiseWorkingMemory({ projectId, sessionId, activeNodeId } =
 
 export function resetWorkingMemory() {
   memory = buildDefaultMemory();
+  resetHiddenProjectStructure();
   updateTimestamp();
   notifyMemory();
   notifySettings();
@@ -680,6 +726,9 @@ export function setWorkingMemorySession(partial = {}) {
   const nodeChanged = next.active_node_id !== memory.session.active_node_id;
   if (!sessionChanged && !projectChanged && !nodeChanged) {
     return getWorkingMemorySnapshot();
+  }
+  if (sessionChanged || projectChanged) {
+    resetHiddenProjectStructure();
   }
   memory.session = next;
   updateTimestamp();
@@ -726,7 +775,8 @@ export function setWorkingMemoryProjectStructure(structure = {}) {
   if (ensureStructureVisibility()) {
     return getWorkingMemorySnapshot();
   }
-  const sanitised = sanitiseStructure(structure);
+  const current = ensureProjectStructure();
+  const sanitised = sanitiseStructure(structure, current);
   const projectUpdate = updateGraphPart('project_graph', sanitised.project_graph, { sanitise: false });
   const elementsUpdate = updateGraphPart('elements_graph', sanitised.elements_graph, { sanitise: false });
   if (!projectUpdate.changed && !elementsUpdate.changed) {
@@ -826,6 +876,12 @@ export function updateWorkingMemorySettings(partial = {}) {
   }
   if (partial.include_project_structure !== undefined) {
     next.include_project_structure = Boolean(partial.include_project_structure);
+  }
+  const includeProjectStructureChanged =
+    partial.include_project_structure !== undefined &&
+    next.include_project_structure !== memory.config.include_project_structure;
+  if (includeProjectStructureChanged && !next.include_project_structure) {
+    thawHiddenProjectStructure();
   }
   if (partial.include_context !== undefined) {
     next.include_context = Boolean(partial.include_context);
