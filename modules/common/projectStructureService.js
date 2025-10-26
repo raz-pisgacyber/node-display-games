@@ -1,7 +1,8 @@
 import { fetchGraph } from './api.js';
 import buildStructureFromGraph from './projectStructure.js';
 import {
-  setWorkingMemoryProjectStructure,
+  setWorkingMemoryProjectGraph,
+  setWorkingMemoryElementsGraph,
   setWorkingMemorySession,
   getWorkingMemorySettings,
 } from './workingMemory.js';
@@ -152,11 +153,13 @@ export async function syncProjectStructureToWorkingMemory(projectId, { force = f
   const includeStructure = shouldLoadStructure();
   setWorkingMemorySession({ project_id: projectId || '' });
   if (!includeStructure) {
-    setWorkingMemoryProjectStructure(cloneStructure(EMPTY_STRUCTURE));
+    setWorkingMemoryProjectGraph(EMPTY_GRAPH);
+    setWorkingMemoryElementsGraph(EMPTY_GRAPH);
     return cloneStructure(EMPTY_STRUCTURE);
   }
   const structure = await getProjectStructureSnapshot(projectId, { force });
-  setWorkingMemoryProjectStructure(structure);
+  setWorkingMemoryProjectGraph(structure.project_graph);
+  setWorkingMemoryElementsGraph(structure.elements_graph);
   return cloneStructure(structure);
 }
 

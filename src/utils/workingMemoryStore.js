@@ -3,10 +3,10 @@ const { pool } = require('../db/mysql');
 const { queryWithLogging, executeWithLogging } = require('./mysqlLogger');
 const {
   WORKING_MEMORY_PARTS,
+  DERIVED_WORKING_MEMORY_PARTS,
   buildDefaultMemory,
   sanitiseWorkingMemoryPart,
   composeWorkingMemory,
-  mergeProjectStructureParts,
 } = require('./workingMemorySchema');
 
 function normalisePartName(part) {
@@ -62,7 +62,7 @@ async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
       if (!WORKING_MEMORY_PARTS.has(name)) {
         return;
       }
-      parts[name] = row.payload;
+      parts[name] = parseJsonPayload(row.payload);
       if (!resolvedProjectId && row.project_id) {
         resolvedProjectId = row.project_id;
       }
@@ -86,6 +86,16 @@ async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
   }
 }
 
+async function persistPart({ connection, sessionId, projectId, name, value }) {
+  await executeWithLogging(
+    connection,
+    `INSERT INTO working_memory_parts (session_id, project_id, part, payload)
+     VALUES (?, ?, ?, CAST(? AS JSON))
+     ON DUPLICATE KEY UPDATE project_id = VALUES(project_id), payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
+    [sessionId, projectId, name, JSON.stringify(value)]
+  );
+}
+
 async function saveWorkingMemoryPart({
   sessionId,
   projectId,
@@ -105,36 +115,33 @@ async function saveWorkingMemoryPart({
 
   const existingConnection = connection || (await pool.getConnection());
   try {
-    let sanitised;
-    if (name === 'project_structure') {
-      let existingValue = null;
-      try {
-        const [rows] = await queryWithLogging(
-          existingConnection,
-          'SELECT payload FROM working_memory_parts WHERE session_id = ? AND part = ?',
-          [sessionId, name]
-        );
-        if (rows.length > 0) {
-          existingValue = parseJsonPayload(rows[0].payload);
-        }
-      } catch (selectError) {
-        console.warn('Failed to load existing project structure for merge', selectError);
-      }
-      sanitised = mergeProjectStructureParts(existingValue, value, {
-        scope: options.scope,
-        source: value,
+    if (DERIVED_WORKING_MEMORY_PARTS.has(name)) {
+      const sanitisedStructure = sanitiseWorkingMemoryPart('project_structure', value);
+      await persistPart({
+        connection: existingConnection,
+        sessionId,
+        projectId: targetProjectId,
+        name: 'project_graph',
+        value: sanitisedStructure.project_graph,
       });
-    } else {
-      sanitised = sanitiseWorkingMemoryPart(name, value, options);
+      await persistPart({
+        connection: existingConnection,
+        sessionId,
+        projectId: targetProjectId,
+        name: 'elements_graph',
+        value: sanitisedStructure.elements_graph,
+      });
+      return { part: name, value: sanitisedStructure };
     }
 
-    await executeWithLogging(
-      existingConnection,
-      `INSERT INTO working_memory_parts (session_id, project_id, part, payload)
-       VALUES (?, ?, ?, CAST(? AS JSON))
-       ON DUPLICATE KEY UPDATE project_id = VALUES(project_id), payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
-      [sessionId, targetProjectId, name, JSON.stringify(sanitised)]
-    );
+    const sanitised = sanitiseWorkingMemoryPart(name, value, options);
+    await persistPart({
+      connection: existingConnection,
+      sessionId,
+      projectId: targetProjectId,
+      name,
+      value: sanitised,
+    });
     return { part: name, value: sanitised };
   } finally {
     if (!connection) {
