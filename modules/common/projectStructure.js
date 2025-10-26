@@ -28,6 +28,14 @@ function pickFirstString(...candidates) {
   return '';
 }
 
+function classifyBuilder(meta = {}) {
+  const raw = typeof meta.builder === 'string' ? meta.builder.toLowerCase() : '';
+  if (raw === 'project') return 'project';
+  if (raw === 'elements' || meta.elementData || meta.elementType) return 'elements';
+  if (meta.projectData) return 'project';
+  return 'project';
+}
+
 export function buildStructureFromGraph(nodes = [], edges = []) {
   const projectGraph = { nodes: [], edges: [] };
   const elementsGraph = { nodes: [], edges: [] };
@@ -35,7 +43,7 @@ export function buildStructureFromGraph(nodes = [], edges = []) {
   const projectNodeMap = new Map();
   const elementNodeMap = new Map();
   const projectChildren = new Map();
-  const nodeLinks = new Map();
+  const crossLinks = [];
 
   nodes.forEach((node) => {
     if (!node) {
@@ -46,16 +54,9 @@ export function buildStructureFromGraph(nodes = [], edges = []) {
       return;
     }
     const meta = node.meta && typeof node.meta === 'object' ? node.meta : {};
-    const builderRaw =
-      typeof meta.builder === 'string' ? meta.builder.trim().toLowerCase() : '';
-    const isProjectNode =
-      builderRaw === 'project' || meta.projectData !== undefined;
-    const isElementNode =
-      builderRaw === 'elements' ||
-      meta.elementData !== undefined ||
-      meta.elementType !== undefined;
+    const builderType = classifyBuilder(meta);
 
-    if (isProjectNode) {
+    if (builderType === 'project') {
       const label =
         pickFirstString(
           meta.projectData?.title,
@@ -79,11 +80,10 @@ export function buildStructureFromGraph(nodes = [], edges = []) {
       projectGraph.nodes.push(entry);
       projectNodeMap.set(id, entry);
       projectChildren.set(id, new Set());
-      nodeLinks.set(id, new Map());
       return;
     }
 
-    if (isElementNode) {
+    if (builderType === 'elements') {
       const label =
         pickFirstString(
           meta.elementData?.title,
@@ -107,7 +107,6 @@ export function buildStructureFromGraph(nodes = [], edges = []) {
       };
       elementsGraph.nodes.push(entry);
       elementNodeMap.set(id, entry);
-      nodeLinks.set(id, new Map());
       return;
     }
 
@@ -117,18 +116,18 @@ export function buildStructureFromGraph(nodes = [], edges = []) {
       id,
       label: fallbackLabel,
       type: fallbackType,
-      builder: builderRaw || 'project',
+      builder: builderType || 'project',
       children: [],
       links: [],
     };
     projectGraph.nodes.push(entry);
     projectNodeMap.set(id, entry);
     projectChildren.set(id, new Set());
-    nodeLinks.set(id, new Map());
   });
 
   const projectEdgeSet = new Set();
   const elementEdgeSet = new Set();
+  const crossLinkSet = new Set();
 
   function addEdge(target, cache, from, to, type) {
     const key = `${from}->${to}:${type}`;
@@ -139,16 +138,13 @@ export function buildStructureFromGraph(nodes = [], edges = []) {
     target.push({ from, to, type });
   }
 
-  function addLink(sourceId, targetId, type) {
-    const linkBucket = nodeLinks.get(sourceId);
-    if (!linkBucket) {
+  function addCrossLink(sourceId, targetId, type) {
+    const key = `${sourceId}->${targetId}:${type}`;
+    if (crossLinkSet.has(key)) {
       return;
     }
-    const key = `${targetId}:${type}`;
-    if (linkBucket.has(key)) {
-      return;
-    }
-    linkBucket.set(key, { to: targetId, type });
+    crossLinkSet.add(key);
+    crossLinks.push({ from: sourceId, to: targetId, type });
   }
 
   edges.forEach((edge) => {
@@ -169,41 +165,38 @@ export function buildStructureFromGraph(nodes = [], edges = []) {
     const fromIsElement = elementNodeMap.has(fromId);
     const toIsElement = elementNodeMap.has(toId);
 
-    if (type === 'CHILD_OF' && fromIsProject && toIsProject) {
+    if (fromIsProject && toIsProject) {
       addEdge(projectGraph.edges, projectEdgeSet, fromId, toId, type);
-      const childrenSet = projectChildren.get(fromId);
-      if (childrenSet) {
-        childrenSet.add(toId);
+      if (type === 'CHILD_OF') {
+        const childrenSet = projectChildren.get(fromId);
+        if (childrenSet) {
+          childrenSet.add(toId);
+        }
       }
+      return;
     }
 
-    if (fromIsElement || toIsElement) {
+    if (fromIsElement && toIsElement) {
       addEdge(elementsGraph.edges, elementEdgeSet, fromId, toId, type);
+      return;
     }
 
     const crossesGraphs =
       (fromIsProject && toIsElement) || (fromIsElement && toIsProject);
     if (crossesGraphs) {
-      addLink(fromId, toId, type);
-      addLink(toId, fromId, type);
+      addCrossLink(fromId, toId, type);
     }
   });
 
   projectGraph.nodes.forEach((node) => {
     const childrenSet = projectChildren.get(node.id);
     node.children = childrenSet ? Array.from(childrenSet) : [];
-    const linkBucket = nodeLinks.get(node.id);
-    node.links = linkBucket ? Array.from(linkBucket.values()) : [];
-  });
-
-  elementsGraph.nodes.forEach((node) => {
-    const linkBucket = nodeLinks.get(node.id);
-    node.links = linkBucket ? Array.from(linkBucket.values()) : [];
   });
 
   return {
     project_graph: projectGraph,
     elements_graph: elementsGraph,
+    cross_links: crossLinks,
   };
 }
 
