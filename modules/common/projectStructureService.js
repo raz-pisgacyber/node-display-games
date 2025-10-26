@@ -155,6 +155,12 @@ async function fetchStructure(projectId) {
     };
   }
   const graph = await fetchGraph(projectId);
+  if (graph && (graph.project_graph || graph.elements_graph)) {
+    return sanitiseStructure({
+      project_graph: graph.project_graph,
+      elements_graph: graph.elements_graph,
+    });
+  }
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const built = buildStructureFromGraph(nodes, edges);
@@ -169,6 +175,29 @@ async function fetchStructure(projectId) {
     );
   }
   return sanitised;
+}
+
+function applySnapshotToWorkingMemory(projectId, structure, includeStructure) {
+  if (cache.projectId && cache.projectId !== projectId) {
+    clearProjectStructureCache();
+  }
+  cache.projectId = projectId || null;
+  const snapshot = structure
+    ? applyStructureToCache(structure)
+    : getCachedStructureSnapshot();
+
+  setWorkingMemorySession({ project_id: projectId || '' });
+
+  if (includeStructure) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'project_graph')) {
+      setWorkingMemoryProjectGraph(snapshot.project_graph);
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'elements_graph')) {
+      setWorkingMemoryElementsGraph(snapshot.elements_graph);
+    }
+  }
+
+  return cloneStructure(snapshot);
 }
 
 export function clearProjectStructureCache(projectId) {
@@ -216,30 +245,26 @@ export async function getProjectStructureSnapshot(projectId, { force = false } =
   return promise;
 }
 
-export async function syncProjectStructureToWorkingMemory(projectId, { force = false } = {}) {
+export async function syncProjectStructureToWorkingMemory(
+  projectId,
+  { force = false, structure } = {}
+) {
   const includeStructure = shouldLoadStructure();
-  let structure;
-  if (includeStructure) {
-    structure = await getProjectStructureSnapshot(projectId, { force });
+  if (structure) {
+    return applySnapshotToWorkingMemory(projectId, structure, includeStructure);
+  }
+
+  let resolvedStructure;
+  if (includeStructure || force) {
+    resolvedStructure = await getProjectStructureSnapshot(projectId, { force });
   } else {
-    structure = getCachedStructureSnapshot();
+    resolvedStructure = getCachedStructureSnapshot();
   }
 
-  setWorkingMemorySession({ project_id: projectId || '' });
-
-  if (includeStructure) {
-    if (Object.prototype.hasOwnProperty.call(structure, 'project_graph')) {
-      setWorkingMemoryProjectGraph(structure.project_graph);
-    }
-    if (Object.prototype.hasOwnProperty.call(structure, 'elements_graph')) {
-      setWorkingMemoryElementsGraph(structure.elements_graph);
-    }
-  }
-
-  return cloneStructure(structure);
+  return applySnapshotToWorkingMemory(projectId, resolvedStructure, includeStructure);
 }
 
-export async function rebuildProjectStructure(projectId) {
+export async function rebuildProjectStructure(projectId, options = {}) {
   clearProjectStructureCache(projectId);
-  return syncProjectStructureToWorkingMemory(projectId, { force: true });
+  return syncProjectStructureToWorkingMemory(projectId, { ...options, force: true });
 }

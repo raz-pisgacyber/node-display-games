@@ -3,6 +3,7 @@ import ProjectNode from './ProjectNode.js';
 import util, { enableZoomPan, ensureCanvas, log } from '../../core/util.js';
 import AutosaveManager from '../common/autosaveManager.js';
 import { fetchGraph, createNode, createEdge, createCheckpoint } from '../common/api.js';
+import buildStructureFromGraph from '../common/projectStructure.js';
 import {
   initialiseWorkingMemory,
   setWorkingMemoryNodeContext,
@@ -573,6 +574,19 @@ const init = async (projectId) => {
     const graph = await fetchGraph(projectId);
     const nodes = graph?.nodes || [];
     const edges = graph?.edges || [];
+
+    const structureSource =
+      graph?.project_graph || graph?.elements_graph
+        ? {
+            project_graph: graph.project_graph,
+            elements_graph: graph.elements_graph,
+          }
+        : buildStructureFromGraph(nodes, edges);
+    try {
+      await syncProjectStructureToWorkingMemory(state.projectId, { structure: structureSource });
+    } catch (structureError) {
+      console.warn('Failed to prime project structure in working memory', structureError);
+    }
     const availableElements = nodes
       .filter((node) => (node.meta?.builder || '').toLowerCase() === 'elements')
       .map((nodeData) => {
@@ -684,12 +698,6 @@ const init = async (projectId) => {
   });
 
   log('Project builder initialised.');
-
-  try {
-    await syncProjectStructureToWorkingMemory(state.projectId, { force: true });
-  } catch (error) {
-    console.warn('Failed to load project structure into working memory', error);
-  }
 
   window.builder = {
     util,

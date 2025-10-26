@@ -263,3 +263,10 @@
   - Added a deep-merge helper for node meta updates and conflict detection that blocks replacements dropping project or element metadata.
   - Ensured meta updates continue to refresh local node state with server responses while skipping empty PATCH requests.
 - Verification: Not run (no automated test suite available).
+## 2025-11-26 11:30 UTC
+- Files modified: `modules/common/api.js`, `modules/common/projectStructureService.js`, `modules/project/project.js`, `modules/elements/elements.js`, `src/routes/api.js`, `src/utils/projectStructure.js`.
+- Completed tasks:
+  - Added a shared server-side graph-structure builder and extended `/api/graph` plus a new `/api/graph/:projectId` route to return precomputed project and element subgraphs alongside raw nodes/edges.
+  - Updated the front-end project and elements builders to hydrate working memory immediately from the full graph response, eliminating the late refresh that previously wiped state when switching surfaces.
+  - Taught the project-structure service to accept prebuilt snapshots, reuse cached data, and avoid redundant fetches while still supporting rebuilds after structural mutations.
+- Verification: Not run (no automated test suite available).
