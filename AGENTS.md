@@ -128,3 +128,8 @@ Next steps or handoff notes: Monitor downstream UI updates to ensure they pass e
 Summary of work completed: Prevented autosave meta payloads from overwriting sibling builder data and hardened the API’s meta merge logic.
 Key implementation details or architectural notes: Updated the browser autosave manager to send `metaUpdates` instead of full `meta` blobs, introduced a deep merge helper on the PATCH /node route, and added conflict detection that rejects meta replacements dropping project or element data.
 Next steps or handoff notes: Monitor future node persistence changes to ensure they continue using partial meta updates and extend deep-merge coverage if new nested branches are introduced.
+
+## [2025-11-26 12:00 UTC] - assistant
+Summary of work completed: Ensured working-memory viewers default to full project and elements graphs when no node scope is available, preserved sibling graph data during scoped views, and guaranteed builder entry keeps project structure enabled.
+Key implementation details or architectural notes: Added hidden-graph update helpers so working-memory sync routines populate cached project/elements graphs even when the structure toggle is off, normalised viewer options to drop empty node scopes, updated scoped snapshot building to fall back to cached graphs when nodes are missing, and taught project/elements builders to enforce `include_project_structure = true` before opening the viewer.
+Next steps or handoff notes: Observe builder interactions for any regressions around working-memory settings persistence, especially when users intentionally disable project structure before refreshing the page.
