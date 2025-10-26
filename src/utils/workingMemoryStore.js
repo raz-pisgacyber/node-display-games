@@ -9,6 +9,14 @@ const {
   composeWorkingMemory,
 } = require('./workingMemorySchema');
 
+// Ensure the working-memory parts registry recognises the split graph payloads.
+if (!WORKING_MEMORY_PARTS.has('project_graph')) {
+  WORKING_MEMORY_PARTS.add('project_graph');
+}
+if (!WORKING_MEMORY_PARTS.has('elements_graph')) {
+  WORKING_MEMORY_PARTS.add('elements_graph');
+}
+
 function normalisePartName(part) {
   if (typeof part !== 'string') {
     return '';
@@ -67,6 +75,16 @@ async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
         resolvedProjectId = row.project_id;
       }
     });
+
+    if (parts.project_graph || parts.elements_graph) {
+      const mergedStructure = sanitiseWorkingMemoryPart('project_structure', {
+        ...(parts.project_structure || {}),
+        project_graph: parts.project_graph,
+        elements_graph: parts.elements_graph,
+      });
+      parts.project_structure = mergedStructure;
+    }
+
     if (resolvedProjectId) {
       parts.session = {
         ...(parts.session || {}),
@@ -130,6 +148,13 @@ async function saveWorkingMemoryPart({
         projectId: targetProjectId,
         name: 'elements_graph',
         value: sanitisedStructure.elements_graph,
+      });
+      await persistPart({
+        connection: existingConnection,
+        sessionId,
+        projectId: targetProjectId,
+        name: 'project_structure',
+        value: sanitisedStructure,
       });
       return { part: name, value: sanitisedStructure };
     }

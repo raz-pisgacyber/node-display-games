@@ -228,3 +228,9 @@
   - Simplified the MySQL store so each graph write replaces its JSON payload directly and legacy `project_structure` saves are fanned out to the new parts for backward compatibility.
   - Updated the browser working-memory store, project structure service, main builder, and MCP integration to use graph-specific setters, preventing builder switches from overwriting unrelated graph data.
 - Verification: Not run (no automated test suite available).
+## 2025-11-20 09:00 UTC
+- Files modified: `src/utils/workingMemoryStore.js`.
+- Completed tasks:
+  - Ensured the working-memory store always recognises the split `project_graph` and `elements_graph` parts and hydrates a merged `project_structure` snapshot during reads.
+  - Persisted the combined `project_structure` alongside its split counterparts when saving derived data to keep legacy consumers in sync.
+- Verification: Not run (no automated test suite available).
