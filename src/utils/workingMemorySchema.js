@@ -24,6 +24,9 @@ const DERIVED_WORKING_MEMORY_PARTS = new Set(['project_structure']);
 const MAX_HISTORY_LENGTH = 200;
 const MAX_AUTO_REFRESH_INTERVAL = 600;
 
+const hasOwn = (source, key) =>
+  source !== null && typeof source === 'object' && Object.prototype.hasOwnProperty.call(source, key);
+
 function clamp(value, min, max) {
   const lower = min === undefined ? value : Math.max(value, min);
   const upper = max === undefined ? lower : Math.min(lower, max);
@@ -197,16 +200,38 @@ function sanitiseStructure(structure) {
   };
 }
 
-function sanitiseStructureFromParts({ projectGraph, elementsGraph, structure }) {
-  const base = sanitiseStructure(structure);
-  const resolvedProjectGraph =
-    projectGraph === undefined ? base.project_graph : sanitiseGraph(projectGraph);
-  const resolvedElementsGraph =
-    elementsGraph === undefined ? base.elements_graph : sanitiseGraph(elementsGraph);
-  return {
-    project_graph: resolvedProjectGraph,
-    elements_graph: resolvedElementsGraph,
+function mergeProjectStructureParts(existingStructure, overrides = {}) {
+  const base = sanitiseStructure(existingStructure);
+  const result = {
+    project_graph: base.project_graph,
+    elements_graph: base.elements_graph,
   };
+
+  if (hasOwn(overrides, 'project_graph')) {
+    result.project_graph = sanitiseGraph(overrides.project_graph);
+  } else if (hasOwn(overrides, 'projectGraph')) {
+    result.project_graph = sanitiseGraph(overrides.projectGraph);
+  }
+
+  if (hasOwn(overrides, 'elements_graph')) {
+    result.elements_graph = sanitiseGraph(overrides.elements_graph);
+  } else if (hasOwn(overrides, 'elementsGraph')) {
+    result.elements_graph = sanitiseGraph(overrides.elementsGraph);
+  }
+
+  return result;
+}
+
+function sanitiseStructureFromParts({ projectGraph, elementsGraph, structure, fallbackStructure } = {}) {
+  const baseSource = structure !== undefined ? structure : fallbackStructure;
+  const overrides = {};
+  if (projectGraph !== undefined) {
+    overrides.project_graph = projectGraph;
+  }
+  if (elementsGraph !== undefined) {
+    overrides.elements_graph = elementsGraph;
+  }
+  return mergeProjectStructureParts(baseSource, overrides);
 }
 
 function sanitiseNodeContext(context) {
@@ -357,8 +382,24 @@ function sanitiseWorkingMemoryPart(part, value, options = {}) {
       return sanitiseGraph(value);
     case 'elements_graph':
       return sanitiseGraph(value);
-    case 'project_structure':
-      return sanitiseStructure(value);
+    case 'project_structure': {
+      const source = ensureObject(value);
+      const structureOptions = {
+        structure: source,
+        fallbackStructure: options.existingStructure,
+      };
+      if (hasOwn(source, 'project_graph')) {
+        structureOptions.projectGraph = source.project_graph;
+      } else if (hasOwn(source, 'projectGraph')) {
+        structureOptions.projectGraph = source.projectGraph;
+      }
+      if (hasOwn(source, 'elements_graph')) {
+        structureOptions.elementsGraph = source.elements_graph;
+      } else if (hasOwn(source, 'elementsGraph')) {
+        structureOptions.elementsGraph = source.elementsGraph;
+      }
+      return sanitiseStructureFromParts(structureOptions);
+    }
     case 'node_context':
       return sanitiseNodeContext(value);
     case 'fetched_context':
@@ -403,24 +444,83 @@ function buildDefaultMemory(overrides = {}) {
   };
 }
 
-function composeWorkingMemory(parts = {}) {
-  const defaults = buildDefaultMemory();
-  const incomingConfig = parts.config || defaults.config;
+function composeWorkingMemory(parts = {}, existingMemory = {}) {
+  const resolvedParts = ensureObject(parts);
+  const resolvedExisting = ensureObject(existingMemory);
+  const defaults = buildDefaultMemory(resolvedExisting);
+
+  const incomingConfig = hasOwn(resolvedParts, 'config')
+    ? resolvedParts.config
+    : hasOwn(resolvedExisting, 'config')
+    ? resolvedExisting.config
+    : defaults.config;
   const config = sanitiseConfig(incomingConfig);
 
-  const session = sanitiseSession({ ...defaults.session, ...ensureObject(parts.session) });
-  const projectStructure = sanitiseStructureFromParts({
-    projectGraph: parts.project_graph,
-    elementsGraph: parts.elements_graph,
-    structure: parts.project_structure || defaults.project_structure,
+  const session = sanitiseSession({
+    ...defaults.session,
+    ...ensureObject(resolvedExisting.session),
+    ...ensureObject(resolvedParts.session),
   });
-  const nodeContext = sanitiseNodeContext(parts.node_context || defaults.node_context);
-  const fetchedContext = sanitiseFetchedContext(parts.fetched_context || defaults.fetched_context);
-  const workingHistory = sanitiseWorkingHistory(parts.working_history || defaults.working_history);
-  const messages = sanitiseMessages(parts.messages || defaults.messages, {
+
+  const existingStructure = hasOwn(resolvedExisting, 'project_structure')
+    ? resolvedExisting.project_structure
+    : undefined;
+  const structureOptions = {
+    structure: hasOwn(resolvedParts, 'project_structure')
+      ? resolvedParts.project_structure
+      : existingStructure !== undefined
+      ? existingStructure
+      : defaults.project_structure,
+    fallbackStructure: defaults.project_structure,
+  };
+  if (hasOwn(resolvedParts, 'project_graph')) {
+    structureOptions.projectGraph = resolvedParts.project_graph;
+  } else if (existingStructure && hasOwn(existingStructure, 'project_graph')) {
+    structureOptions.projectGraph = existingStructure.project_graph;
+  }
+  if (hasOwn(resolvedParts, 'elements_graph')) {
+    structureOptions.elementsGraph = resolvedParts.elements_graph;
+  } else if (existingStructure && hasOwn(existingStructure, 'elements_graph')) {
+    structureOptions.elementsGraph = existingStructure.elements_graph;
+  }
+  const projectStructure = sanitiseStructureFromParts(structureOptions);
+
+  const nodeContextSource = hasOwn(resolvedParts, 'node_context')
+    ? resolvedParts.node_context
+    : hasOwn(resolvedExisting, 'node_context')
+    ? resolvedExisting.node_context
+    : defaults.node_context;
+  const nodeContext = sanitiseNodeContext(nodeContextSource);
+
+  const fetchedContextSource = hasOwn(resolvedParts, 'fetched_context')
+    ? resolvedParts.fetched_context
+    : hasOwn(resolvedExisting, 'fetched_context')
+    ? resolvedExisting.fetched_context
+    : defaults.fetched_context;
+  const fetchedContext = sanitiseFetchedContext(fetchedContextSource);
+
+  const workingHistorySource = hasOwn(resolvedParts, 'working_history')
+    ? resolvedParts.working_history
+    : hasOwn(resolvedExisting, 'working_history')
+    ? resolvedExisting.working_history
+    : defaults.working_history;
+  const workingHistory = sanitiseWorkingHistory(workingHistorySource);
+
+  const messagesSource = hasOwn(resolvedParts, 'messages')
+    ? resolvedParts.messages
+    : hasOwn(resolvedExisting, 'messages')
+    ? resolvedExisting.messages
+    : defaults.messages;
+  const messages = sanitiseMessages(messagesSource, {
     historyLength: config.history_length,
   });
-  const lastUserMessage = sanitiseLastUserMessage(parts.last_user_message, { messages });
+
+  const lastUserMessageSource = hasOwn(resolvedParts, 'last_user_message')
+    ? resolvedParts.last_user_message
+    : hasOwn(resolvedExisting, 'last_user_message')
+    ? resolvedExisting.last_user_message
+    : undefined;
+  const lastUserMessage = sanitiseLastUserMessage(lastUserMessageSource, { messages });
 
   return {
     session,
@@ -442,7 +542,7 @@ function normaliseWorkingMemory(memory) {
       parts[key] = source[key];
     }
   });
-  return composeWorkingMemory(parts);
+  return composeWorkingMemory(parts, source);
 }
 
 module.exports = {
@@ -451,6 +551,7 @@ module.exports = {
   DERIVED_WORKING_MEMORY_PARTS,
   MAX_HISTORY_LENGTH,
   buildDefaultMemory,
+  mergeProjectStructureParts,
   sanitiseWorkingMemoryPart,
   composeWorkingMemory,
   normaliseWorkingMemory,

@@ -120,3 +120,7 @@ Next steps or handoff notes: Monitor future feature work for schema drift and ex
 Summary of work completed: Unified project structure loading across builders via a shared service, limited refresh triggers to structural mutations, and ensured MCP’s getWorkingMemory tool simply returns the provided client snapshot.
 Key implementation details or architectural notes: Added `modules/common/projectStructureService.js` to cache and sanitise Neo4j graph payloads, taught project/elements builders plus autosave/link workflows to call `rebuildProjectStructure` only after structural API writes, removed UI-driven partial structure rebuilds, and trimmed working-memory sanitisation to `{id,label,type,builder}`.
 Next steps or handoff notes: Consider debouncing repeated rebuild requests when batch operations create many structural mutations in rapid succession.
+## [2025-10-26 21:03:07 UTC] - assistant
+Summary of work completed: Hardened working-memory schema merging so project and elements graphs persist through partial updates and composeWorkingMemory reuses existing snapshots.
+Key implementation details or architectural notes: Introduced mergeProjectStructureParts helper, taught sanitiseStructureFromParts and sanitiseWorkingMemoryPart to preserve sibling graphs, and updated composeWorkingMemory/loadWorkingMemory to merge incremental graph payloads without wiping data.
+Next steps or handoff notes: Monitor downstream UI updates to ensure they pass existing project_structure when dispatching partial graph changes.
