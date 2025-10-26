@@ -234,3 +234,10 @@
   - Ensured the working-memory store always recognises the split `project_graph` and `elements_graph` parts and hydrates a merged `project_structure` snapshot during reads.
   - Persisted the combined `project_structure` alongside its split counterparts when saving derived data to keep legacy consumers in sync.
 - Verification: Not run (no automated test suite available).
+## 2025-11-21 10:00 UTC
+- Files modified: `modules/common/workingMemory.js`, `agent_history`.
+- Completed tasks:
+  - Hardened browser working-memory merges so project and element graph slices persist across partial updates by introducing fallback-aware sanitisation and targeted graph-part updates.
+  - Added non-destructive project-structure visibility handling that preserves hidden graphs while config toggles disable the section.
+  - Synced working-memory loads with the new split graph persistence, ensuring backend partial responses merge with the existing snapshot instead of wiping sibling graphs.
+- Verification: Not run (no automated test suite available).
