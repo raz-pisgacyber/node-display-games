@@ -8,32 +8,26 @@ import {
 } from './workingMemory.js';
 
 const EMPTY_GRAPH = Object.freeze({ nodes: [], edges: [] });
-const EMPTY_STRUCTURE = Object.freeze({
-  project_graph: EMPTY_GRAPH,
-  elements_graph: EMPTY_GRAPH,
-});
-
-function cloneStructure(structure) {
-  const projectGraph = structure?.project_graph || EMPTY_GRAPH;
-  const elementGraph = structure?.elements_graph || EMPTY_GRAPH;
+function cloneGraph(graph = EMPTY_GRAPH) {
   return {
-    project_graph: {
-      nodes: Array.isArray(projectGraph.nodes)
-        ? projectGraph.nodes.map((node) => ({ ...node }))
-        : [],
-      edges: Array.isArray(projectGraph.edges)
-        ? projectGraph.edges.map((edge) => ({ ...edge }))
-        : [],
-    },
-    elements_graph: {
-      nodes: Array.isArray(elementGraph.nodes)
-        ? elementGraph.nodes.map((node) => ({ ...node }))
-        : [],
-      edges: Array.isArray(elementGraph.edges)
-        ? elementGraph.edges.map((edge) => ({ ...edge }))
-        : [],
-    },
+    nodes: Array.isArray(graph?.nodes)
+      ? graph.nodes.map((node) => ({ ...node }))
+      : [],
+    edges: Array.isArray(graph?.edges)
+      ? graph.edges.map((edge) => ({ ...edge }))
+      : [],
   };
+}
+
+function cloneStructure(structure = {}) {
+  const result = {};
+  if (Object.prototype.hasOwnProperty.call(structure, 'project_graph')) {
+    result.project_graph = cloneGraph(structure.project_graph);
+  }
+  if (Object.prototype.hasOwnProperty.call(structure, 'elements_graph')) {
+    result.elements_graph = cloneGraph(structure.elements_graph);
+  }
+  return result;
 }
 
 function sanitiseNode(entry) {
@@ -68,35 +62,85 @@ function sanitiseEdge(edge) {
   };
 }
 
+function sanitiseGraph(graph) {
+  const nodes = Array.isArray(graph?.nodes)
+    ? graph.nodes.map(sanitiseNode).filter(Boolean)
+    : [];
+  const edges = Array.isArray(graph?.edges)
+    ? graph.edges.map(sanitiseEdge).filter(Boolean)
+    : [];
+  return { nodes, edges };
+}
+
 function sanitiseStructure(structure) {
   if (!structure || typeof structure !== 'object') {
-    return cloneStructure(EMPTY_STRUCTURE);
+    return {};
   }
-  const projectGraph = structure.project_graph || {};
-  const elementsGraph = structure.elements_graph || {};
-  const projectNodes = Array.isArray(projectGraph.nodes)
-    ? projectGraph.nodes.map(sanitiseNode).filter(Boolean)
-    : [];
-  const projectEdges = Array.isArray(projectGraph.edges)
-    ? projectGraph.edges.map(sanitiseEdge).filter(Boolean)
-    : [];
-  const elementNodes = Array.isArray(elementsGraph.nodes)
-    ? elementsGraph.nodes.map(sanitiseNode).filter(Boolean)
-    : [];
-  const elementEdges = Array.isArray(elementsGraph.edges)
-    ? elementsGraph.edges.map(sanitiseEdge).filter(Boolean)
-    : [];
-  return {
-    project_graph: { nodes: projectNodes, edges: projectEdges },
-    elements_graph: { nodes: elementNodes, edges: elementEdges },
-  };
+  const result = {};
+  if (Object.prototype.hasOwnProperty.call(structure, 'project_graph')) {
+    result.project_graph = sanitiseGraph(structure.project_graph);
+  }
+  if (Object.prototype.hasOwnProperty.call(structure, 'elements_graph')) {
+    result.elements_graph = sanitiseGraph(structure.elements_graph);
+  }
+  return result;
 }
 
 const cache = {
   projectId: null,
-  structure: null,
+  project_graph: null,
+  elements_graph: null,
   promise: null,
+  promiseProjectId: null,
 };
+
+function graphsEqual(a, b) {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function getCachedStructureSnapshot() {
+  return {
+    project_graph: cloneGraph(cache.project_graph || EMPTY_GRAPH),
+    elements_graph: cloneGraph(cache.elements_graph || EMPTY_GRAPH),
+  };
+}
+
+function applyStructureToCache(structure) {
+  const sanitised = sanitiseStructure(structure);
+  let projectGraphChanged = false;
+  let elementsGraphChanged = false;
+
+  if (Object.prototype.hasOwnProperty.call(sanitised, 'project_graph')) {
+    if (!graphsEqual(cache.project_graph, sanitised.project_graph)) {
+      cache.project_graph = sanitised.project_graph;
+      projectGraphChanged = true;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(sanitised, 'elements_graph')) {
+    if (!graphsEqual(cache.elements_graph, sanitised.elements_graph)) {
+      cache.elements_graph = sanitised.elements_graph;
+      elementsGraphChanged = true;
+    }
+  }
+
+  if (projectGraphChanged !== elementsGraphChanged) {
+    const changed = projectGraphChanged ? 'project_graph' : 'elements_graph';
+    console.debug(
+      '[projectStructureService] Updated only %s for project %s',
+      changed,
+      cache.projectId ?? 'unknown'
+    );
+  }
+
+  return getCachedStructureSnapshot();
+}
 
 function shouldLoadStructure() {
   const settings = getWorkingMemorySettings();
@@ -105,13 +149,26 @@ function shouldLoadStructure() {
 
 async function fetchStructure(projectId) {
   if (!projectId) {
-    return cloneStructure(EMPTY_STRUCTURE);
+    return {
+      project_graph: EMPTY_GRAPH,
+      elements_graph: EMPTY_GRAPH,
+    };
   }
   const graph = await fetchGraph(projectId);
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const built = buildStructureFromGraph(nodes, edges);
-  return sanitiseStructure(built);
+  const sanitised = sanitiseStructure(built);
+  if (
+    !Object.prototype.hasOwnProperty.call(sanitised, 'project_graph') ||
+    !Object.prototype.hasOwnProperty.call(sanitised, 'elements_graph')
+  ) {
+    console.debug(
+      '[projectStructureService] Partial structure received for project %s',
+      projectId
+    );
+  }
+  return sanitised;
 }
 
 export function clearProjectStructureCache(projectId) {
@@ -120,46 +177,65 @@ export function clearProjectStructureCache(projectId) {
   }
   if (!projectId || cache.projectId === projectId) {
     cache.projectId = projectId || null;
-    cache.structure = null;
+    cache.project_graph = null;
+    cache.elements_graph = null;
     cache.promise = null;
+    cache.promiseProjectId = null;
   }
 }
 
 export async function getProjectStructureSnapshot(projectId, { force = false } = {}) {
-  if (!force && cache.projectId === projectId && cache.structure) {
-    return cloneStructure(cache.structure);
+  if (cache.projectId && cache.projectId !== projectId) {
+    clearProjectStructureCache();
   }
-  if (!force && cache.projectId === projectId && cache.promise) {
-    return cache.promise.then(cloneStructure);
+  if (!force && cache.projectId === projectId) {
+    if (cache.project_graph || cache.elements_graph) {
+      return getCachedStructureSnapshot();
+    }
+    if (cache.promise && cache.promiseProjectId === projectId) {
+      return cache.promise.then(cloneStructure);
+    }
   }
   cache.projectId = projectId || null;
   const promise = fetchStructure(projectId)
     .then((structure) => {
-      cache.structure = structure;
+      const snapshot = applyStructureToCache(structure);
       cache.promise = null;
-      return cloneStructure(structure);
+      cache.promiseProjectId = null;
+      return snapshot;
     })
     .catch((error) => {
       if (cache.promise === promise) {
         cache.promise = null;
+        cache.promiseProjectId = null;
       }
       throw error;
     });
   cache.promise = promise;
-  return promise.then(cloneStructure);
+  cache.promiseProjectId = projectId || null;
+  return promise;
 }
 
 export async function syncProjectStructureToWorkingMemory(projectId, { force = false } = {}) {
   const includeStructure = shouldLoadStructure();
-  setWorkingMemorySession({ project_id: projectId || '' });
-  if (!includeStructure) {
-    setWorkingMemoryProjectGraph(EMPTY_GRAPH);
-    setWorkingMemoryElementsGraph(EMPTY_GRAPH);
-    return cloneStructure(EMPTY_STRUCTURE);
+  let structure;
+  if (includeStructure) {
+    structure = await getProjectStructureSnapshot(projectId, { force });
+  } else {
+    structure = getCachedStructureSnapshot();
   }
-  const structure = await getProjectStructureSnapshot(projectId, { force });
-  setWorkingMemoryProjectGraph(structure.project_graph);
-  setWorkingMemoryElementsGraph(structure.elements_graph);
+
+  setWorkingMemorySession({ project_id: projectId || '' });
+
+  if (includeStructure) {
+    if (Object.prototype.hasOwnProperty.call(structure, 'project_graph')) {
+      setWorkingMemoryProjectGraph(structure.project_graph);
+    }
+    if (Object.prototype.hasOwnProperty.call(structure, 'elements_graph')) {
+      setWorkingMemoryElementsGraph(structure.elements_graph);
+    }
+  }
+
   return cloneStructure(structure);
 }
 

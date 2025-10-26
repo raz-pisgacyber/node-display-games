@@ -241,3 +241,10 @@
   - Added non-destructive project-structure visibility handling that preserves hidden graphs while config toggles disable the section.
   - Synced working-memory loads with the new split graph persistence, ensuring backend partial responses merge with the existing snapshot instead of wiping sibling graphs.
 - Verification: Not run (no automated test suite available).
+## 2025-11-22 13:45 UTC
+- Files modified: `modules/common/projectStructureService.js`.
+- Completed tasks:
+  - Split the cached project structure into independent project and element graph slices with per-project promises to avoid cross-project races.
+  - Ensured sync operations respect visibility settings, update working memory graphs conditionally, and preserve existing data on partial refreshes.
+  - Added debug logging for single-graph updates and guarded sanitisation so partial backend responses merge safely with cached snapshots.
+- Verification: Not run (no automated test suite available).
