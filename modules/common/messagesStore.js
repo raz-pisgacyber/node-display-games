@@ -17,7 +17,7 @@ const state = {
 const listeners = new Set();
 
 function cloneMessages(list) {
-  return Array.isArray(list) ? list.map((item) => ({ ...item })) : [];
+  return normaliseMessages(list);
 }
 
 function notify() {
@@ -44,6 +44,26 @@ function normaliseNodeId(value) {
   }
   const trimmed = `${value}`.trim();
   return trimmed ? trimmed : null;
+}
+
+function normaliseMessage(message) {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+  const normalisedType =
+    typeof message.message_type === 'string' && message.message_type.trim()
+      ? message.message_type.trim()
+      : 'user_reply';
+  return { ...message, message_type: normalisedType };
+}
+
+function normaliseMessages(list) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list
+    .map(normaliseMessage)
+    .filter((message) => Boolean(message));
 }
 
 export function getMessagesState() {
@@ -128,8 +148,10 @@ export async function fetchMessagesPage({ reset = false, limit } = {}) {
   notify();
   try {
     const data = await fetchMessagesApi(state.sessionId, buildFetchOptions({ reset: effectiveReset, limit }));
-    const incomingMessages = Array.isArray(data?.messages) ? data.messages : [];
-    state.messages = effectiveReset ? incomingMessages : state.messages.concat(incomingMessages);
+    const incomingMessages = normaliseMessages(data?.messages);
+    state.messages = effectiveReset
+      ? incomingMessages
+      : normaliseMessages(state.messages.concat(incomingMessages));
     state.cursor = data?.next_cursor ?? (state.messages.length ? state.messages[state.messages.length - 1].id : null);
     state.hasMore = Boolean(data?.has_more);
     state.totalCount = Number.isInteger(data?.total_count) ? data.total_count : state.messages.length;

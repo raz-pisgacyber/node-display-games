@@ -278,3 +278,10 @@
   - Extended `/api/messages` to validate role/type enums, serve ascending pagination with cursors, and include total/filtered counts alongside the latest user message in the response payload.
   - Rebuilt the main module’s message flow around a dedicated API-backed messages store so UI rendering and working-memory syncs consume server-sourced transcripts and metadata consistently.
 - Verification: Not run (manual reasoning only).
+## 2025-11-27 18:00 UTC
+- Files modified: `modules/common/messagesStore.js`, `modules/main/main.js`, `src/routes/api.js`, `src/utils/validators.js`.
+- Completed tasks:
+  - Hardened the `/api/messages` payload validation with a reusable helper, ensuring session, role, message type, and content are sanitised before inserting.
+  - Updated message persistence to record explicit `message_type` and `created_at` values in column order aligned with the new bindings.
+  - Normalised builder message flows so chat payloads preserve their `message_type` when sending, caching, and syncing into working memory.
+- Verification: Not run (database services unavailable in the execution environment).

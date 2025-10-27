@@ -431,7 +431,10 @@ function syncWorkingMemoryMessages() {
           session_id: message.session_id,
           node_id: message.node_id,
           role: message.role,
-          message_type: message.message_type,
+          message_type:
+            typeof message.message_type === 'string' && message.message_type.trim()
+              ? message.message_type.trim()
+              : 'user_reply',
           content: message.content,
           created_at: message.created_at,
         }))
