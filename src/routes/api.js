@@ -805,84 +805,79 @@ router.post('/messages', async (req, res, next) => {
 
 router.get('/messages', async (req, res, next) => {
   const sessionIdRaw = req.query?.session_id;
-  if (!sessionIdRaw) {
-    res.status(400).json({ error: 'session_id is required' });
-    return;
-  }
-  const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : `${sessionIdRaw}`.trim();
-  if (!sessionId) {
+  const sessionIdText =
+    typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : `${sessionIdRaw ?? ''}`.trim();
+  const sessionId = Number.parseInt(sessionIdText, 10);
+  if (!Number.isFinite(sessionId) || sessionId <= 0) {
     res.status(400).json({ error: 'session_id is required' });
     return;
   }
 
   const nodeIdRaw = req.query?.node_id;
-  let nodeId = null;
-  if (nodeIdRaw !== undefined && nodeIdRaw !== null && nodeIdRaw !== '') {
-    if (typeof nodeIdRaw === 'string') {
-      const trimmedNodeId = nodeIdRaw.trim();
-      nodeId = trimmedNodeId || null;
-    } else if (typeof nodeIdRaw === 'number' || typeof nodeIdRaw === 'bigint') {
-      nodeId = `${nodeIdRaw}`;
-    } else {
-      console.warn('GET /api/messages received non-string node_id. Defaulting to null.', {
-        sessionId,
-        providedType: typeof nodeIdRaw,
-      });
-    }
-  }
+  const nodeIdText =
+    typeof nodeIdRaw === 'string'
+      ? nodeIdRaw.trim()
+      : nodeIdRaw === undefined || nodeIdRaw === null
+      ? ''
+      : `${nodeIdRaw}`.trim();
+  const nodeId = nodeIdText || null;
 
   const cursorRaw = req.query?.cursor;
-  let cursor = null;
-  if (cursorRaw !== undefined && cursorRaw !== null && cursorRaw !== '') {
-    const cursorValue = typeof cursorRaw === 'number' ? cursorRaw : Number.parseInt(`${cursorRaw}`, 10);
-    if (Number.isFinite(cursorValue) && cursorValue >= 0) {
-      cursor = cursorValue;
-    } else {
-      console.warn('GET /api/messages received invalid cursor. Defaulting to null.', {
-        sessionId,
-        providedCursor: cursorRaw,
-      });
-    }
+  const cursorText =
+    typeof cursorRaw === 'string'
+      ? cursorRaw.trim()
+      : cursorRaw === undefined || cursorRaw === null
+      ? ''
+      : `${cursorRaw}`.trim();
+  const cursorValue = cursorText ? Number.parseInt(cursorText, 10) : null;
+  const cursor = Number.isFinite(cursorValue) && cursorValue >= 0 ? cursorValue : null;
+  if (cursorText && cursor === null) {
+    console.warn('GET /api/messages received invalid cursor. Defaulting to null.', {
+      sessionId,
+      providedCursor: cursorRaw,
+    });
   }
 
   const limitRaw = req.query?.limit;
-  let requestedLimit = 50;
-  if (limitRaw !== undefined && limitRaw !== null && limitRaw !== '') {
-    const parsedLimit = typeof limitRaw === 'number' ? limitRaw : Number.parseInt(`${limitRaw}`, 10);
-    if (Number.isFinite(parsedLimit)) {
-      requestedLimit = parsedLimit;
-    } else {
-      console.warn('GET /api/messages received invalid limit. Defaulting to 50.', {
-        sessionId,
-        providedLimit: limitRaw,
-      });
-    }
+  const limitText =
+    typeof limitRaw === 'string'
+      ? limitRaw.trim()
+      : limitRaw === undefined || limitRaw === null
+      ? ''
+      : `${limitRaw}`.trim();
+  const limitParsed = limitText ? Number.parseInt(limitText, 10) : NaN;
+  const limitNormalised = Number.isFinite(limitParsed) && limitParsed > 0 ? limitParsed : 100;
+  if (limitText && (!Number.isFinite(limitParsed) || limitParsed <= 0)) {
+    console.warn('GET /api/messages received invalid limit. Defaulting to 100.', {
+      sessionId,
+      providedLimit: limitRaw,
+    });
   }
-  const cappedLimit = parseLimitParam(requestedLimit, 50, 200);
+  const cappedLimit = parseLimitParam(limitNormalised, 100, 500);
+
+  const whereClauses = ['session_id = ?'];
+  const params = [sessionId];
+
+  if (nodeId) {
+    whereClauses.push('(node_id = ? OR node_id IS NULL)');
+    params.push(nodeId);
+  }
+
+  if (cursor !== null) {
+    whereClauses.push('id > ?');
+    params.push(cursor);
+  }
+
+  const sql =
+    `SELECT id, session_id, node_id, role, content, message_type, created_at
+     FROM messages WHERE ${whereClauses.join(' AND ')}
+     ORDER BY id ASC
+     LIMIT ?`;
+  const queryParams = [...params, cappedLimit + 1];
+
   const connection = await pool.getConnection();
   try {
-    let filterClause = 'WHERE session_id = ?';
-    const filterParams = [sessionId];
-    if (typeof nodeId === 'string' && nodeId) {
-      filterClause += ' AND (node_id = ? OR node_id IS NULL)';
-      filterParams.push(nodeId);
-    }
-
-    const paginationParams = filterParams.slice();
-    let cursorClause = '';
-    if (cursor !== null) {
-      cursorClause = ' AND id > ?';
-      paginationParams.push(cursor);
-    }
-
-    const [rows] = await executeWithLogging(
-      connection,
-      `SELECT id, session_id, node_id, role, content, message_type, created_at
-       FROM messages ${filterClause}${cursorClause}
-       ORDER BY id ASC
-       LIMIT ?`,
-      [...paginationParams, cappedLimit + 1]
-    );
+    const [rows] = await executeWithLogging(connection, sql, queryParams);
     const hasMore = rows.length > cappedLimit;
     const messages = hasMore ? rows.slice(0, cappedLimit) : rows;
     const nextCursor =
@@ -900,7 +895,7 @@ router.get('/messages', async (req, res, next) => {
     const totalCount = Number(totalRows?.[0]?.total_count ?? 0);
 
     let filteredCount = totalCount;
-    if (typeof nodeId === 'string' && nodeId) {
+    if (nodeId) {
       const [filteredRows] = await executeWithLogging(
         connection,
         'SELECT COUNT(*) AS filtered_count FROM messages WHERE session_id = ? AND (node_id = ? OR node_id IS NULL)',

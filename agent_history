@@ -292,3 +292,10 @@
   - Updated the client API wrapper and shared messages store so cursors are treated as finite numbers, preventing accidental string values from reaching the server.
   - Ensured pagination state persists with numeric cursors and only appends SQL cursor clauses when corresponding parameters are bound.
 - Verification: `npm start` *(fails: requires MySQL at localhost:3306)*.
+## 2025-11-27 23:45 UTC
+- Files modified: `src/routes/api.js`.
+- Completed tasks:
+  - Rebuilt the `/api/messages` retrieval logic to normalise session, node, cursor, and limit parameters before executing SQL.
+  - Assembled the SELECT statement via explicit clause tracking so every `?` placeholder has a matching bound value, preventing MySQL argument mismatches.
+  - Preserved existing pagination metadata (has_more, next_cursor, counts, last_user_message) while leveraging the sanitised query inputs.
+- Verification: Not run *(database connections unavailable in container environment).*
