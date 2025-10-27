@@ -6,7 +6,6 @@ import {
   setWorkingMemoryNodeContext,
   setWorkingMemoryMessages,
   setWorkingMemoryWorkingHistory,
-  appendWorkingMemoryMessage,
   getWorkingMemorySettings,
   updateWorkingMemorySettings,
   subscribeWorkingMemorySettings,
@@ -14,6 +13,13 @@ import {
 } from '../common/workingMemory.js';
 import { buildStructureFromGraph } from '../common/projectStructure.js';
 import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
+import {
+  subscribeMessagesStore,
+  setMessagesContext,
+  fetchMessagesPage,
+  sendMessageToSession,
+  clearMessagesContext,
+} from '../common/messagesStore.js';
 
 const AUTOSAVE_DELAY = 1600;
 const DEFAULT_VERSION_INTERVAL = 6000;
@@ -39,6 +45,7 @@ const state = {
   errorBanner: null,
   messages: [],
   messagesStatus: 'idle',
+  messagesMeta: buildDefaultMessagesMeta(),
   newMessage: '',
   summary: null,
   summaryDraft: '',
@@ -60,6 +67,7 @@ const runtime = {
   edgeElements: [],
   dragging: null,
   workingMemorySettingsUnsubscribe: null,
+  messagesUnsubscribe: null,
 };
 
 const ui = { workingMemoryControls: null, workingMemoryButton: null };
@@ -197,6 +205,66 @@ function stableStringify(value) {
 
 function deepEqual(a, b) {
   return stableStringify(a) === stableStringify(b);
+}
+
+function buildDefaultMessagesMeta() {
+  return {
+    total_count: 0,
+    filtered_count: 0,
+    has_more: false,
+    next_cursor: null,
+    last_user_message: '',
+  };
+}
+
+function deriveLastUserMessageFromList(messages) {
+  if (!Array.isArray(messages)) {
+    return '';
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const entry = messages[index];
+    if (entry?.role === 'user' && entry.content) {
+      return entry.content;
+    }
+  }
+  return '';
+}
+
+function mapMessagesStatus(storeStatus) {
+  switch (storeStatus) {
+    case 'error':
+      return 'error';
+    case 'loading':
+    case 'updating':
+    case 'sending':
+      return 'loading';
+    case 'ready':
+      return 'ready';
+    default:
+      return 'idle';
+  }
+}
+
+function handleMessagesStoreUpdate(storeState) {
+  state.messages = Array.isArray(storeState?.messages) ? storeState.messages.slice() : [];
+  state.messagesStatus = mapMessagesStatus(storeState?.status);
+  state.messagesMeta = {
+    total_count: Number.isInteger(storeState?.totalCount)
+      ? storeState.totalCount
+      : state.messages.length,
+    filtered_count: Number.isInteger(storeState?.filteredCount)
+      ? storeState.filteredCount
+      : state.messages.length,
+    has_more: Boolean(storeState?.hasMore),
+    next_cursor: storeState?.cursor ?? null,
+    last_user_message:
+      typeof storeState?.lastUserMessage === 'string' ? storeState.lastUserMessage : '',
+  };
+  if (!state.messagesMeta.last_user_message && state.messages.length) {
+    state.messagesMeta.last_user_message = deriveLastUserMessageFromList(state.messages);
+  }
+  renderMessagesPanel();
+  syncWorkingMemoryMessages();
 }
 
 function cloneForMemory(value) {
@@ -358,16 +426,18 @@ function syncWorkingMemoryNodeContext() {
 
 function syncWorkingMemoryMessages() {
   const messages = Array.isArray(state.messages)
-    ? state.messages.map((message) => ({
-        id: message.id,
-        session_id: message.session_id,
-        node_id: message.node_id,
-        role: message.role,
-        content: message.content,
-        created_at: message.created_at,
-      }))
-    : [];
-  setWorkingMemoryMessages(messages);
+      ? state.messages.map((message) => ({
+          id: message.id,
+          session_id: message.session_id,
+          node_id: message.node_id,
+          role: message.role,
+          message_type: message.message_type,
+          content: message.content,
+          created_at: message.created_at,
+        }))
+      : [];
+  const metadata = state.messagesMeta ? { ...state.messagesMeta } : buildDefaultMessagesMeta();
+  setWorkingMemoryMessages(messages, metadata);
 }
 
 function syncWorkingMemoryWorkingHistory() {
@@ -385,7 +455,7 @@ function resetWorkingMemoryForProject(projectId) {
   setWorkingMemoryProjectGraph({ nodes: [], edges: [] });
   setWorkingMemoryElementsGraph({ nodes: [], edges: [] });
   setWorkingMemoryNodeContext({});
-  setWorkingMemoryMessages([]);
+  setWorkingMemoryMessages([], buildDefaultMessagesMeta());
   setWorkingMemoryWorkingHistory('');
   setWorkingMemorySession({ project_id: projectId || '', active_node_id: '' });
 }
@@ -1750,27 +1820,9 @@ async function handleMessageSubmit(event) {
   event.preventDefault();
   if (!state.session || !state.newMessage.trim()) return;
   try {
-    const created = await fetchJSON(`${API_BASE}/messages`, {
-      method: 'POST',
-      body: {
-        session_id: state.session.id,
-        node_id: state.selectedNodeId || null,
-        role: 'user',
-        content: state.newMessage.trim(),
-      },
-    });
-    appendWorkingMemoryMessage({
-      id: created?.id,
-      session_id: state.session.id,
-      node_id: state.selectedNodeId || null,
-      role: 'user',
-      content: state.newMessage.trim(),
-      created_at: new Date().toISOString(),
-    });
+    await sendMessageToSession(state.newMessage.trim(), { role: 'user', messageType: 'user_reply' });
     state.newMessage = '';
     clearErrorBanner();
-    renderMessagesPanel();
-    refreshMessages();
   } catch (error) {
     console.error(error);
     setErrorBanner(error?.message || 'Request failed');
@@ -1837,30 +1889,25 @@ async function handleRestoreCheckpoint(checkpointId) {
   }
 }
 
-async function refreshMessages() {
+async function refreshMessages({ reset = true } = {}) {
   if (!state.session) {
+    clearMessagesContext();
     state.messages = [];
     state.messagesStatus = 'idle';
+    state.messagesMeta = buildDefaultMessagesMeta();
     renderMessagesPanel();
-    setWorkingMemoryMessages([]);
+    syncWorkingMemoryMessages();
     return;
   }
-  state.messagesStatus = 'loading';
-  renderMessagesPanel();
-  const params = new URLSearchParams({ session_id: state.session.id, limit: '50' });
-  if (state.selectedNodeId) {
-    params.set('node_id', state.selectedNodeId);
-  }
+  const contextChanged = setMessagesContext({
+    sessionId: state.session.id,
+    nodeId: state.selectedNodeId || null,
+  });
   try {
-    const data = await fetchJSON(`${API_BASE}/messages?${params.toString()}`);
-    state.messages = (data.messages || []).slice().reverse();
-    state.messagesStatus = 'ready';
-    syncWorkingMemoryMessages();
+    await fetchMessagesPage({ reset: reset || contextChanged });
   } catch (error) {
     console.error(error);
-    state.messagesStatus = 'error';
   }
-  renderMessagesPanel();
 }
 
 async function loadSummary() {
@@ -1966,6 +2013,7 @@ function setProjectId(projectId) {
   state.isDirty = false;
   state.messages = [];
   state.messagesStatus = 'idle';
+  state.messagesMeta = buildDefaultMessagesMeta();
   state.summary = null;
   state.summaryDraft = '';
   state.checkpoints = [];
@@ -1976,6 +2024,7 @@ function setProjectId(projectId) {
   runtime.seededPositions.clear();
   stopVersionPolling();
   clearAutosaveTimer();
+  clearMessagesContext();
   resetWorkingMemoryForProject(projectId);
   refreshUI();
   if (projectId) {
@@ -2022,7 +2071,13 @@ async function loadSessionForProject(projectId) {
   } catch (error) {
     console.error(error);
     state.sessionError = error?.message || 'Failed to initialise session';
+    clearMessagesContext();
+    state.messages = [];
+    state.messagesStatus = 'error';
+    state.messagesMeta = buildDefaultMessagesMeta();
     renderSessionPanel();
+    renderMessagesPanel();
+    syncWorkingMemoryMessages();
   }
 }
 
@@ -2115,6 +2170,10 @@ function initialiseUI() {
     runtime.workingMemorySettingsUnsubscribe = subscribeWorkingMemorySettings(() => {
       renderWorkingMemorySettings();
     });
+  }
+
+  if (!runtime.messagesUnsubscribe) {
+    runtime.messagesUnsubscribe = subscribeMessagesStore(handleMessagesStoreUpdate);
   }
 
   refreshUI();

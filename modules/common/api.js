@@ -138,7 +138,7 @@ export async function deleteLink(payload, { projectId, keepalive } = {}) {
   });
 }
 
-export async function fetchMessages(sessionId, { nodeId, limit } = {}) {
+export async function fetchMessages(sessionId, { nodeId, limit, cursor } = {}) {
   if (!sessionId) {
     throw new Error('sessionId is required');
   }
@@ -150,24 +150,43 @@ export async function fetchMessages(sessionId, { nodeId, limit } = {}) {
   if (limit) {
     params.set('limit', String(limit));
   }
+  if (cursor) {
+    params.set('cursor', String(cursor));
+  }
   const data = await fetchJSON(`/api/messages?${params.toString()}`);
-  return Array.isArray(data?.messages) ? data.messages : [];
+  return {
+    messages: Array.isArray(data?.messages) ? data.messages : [],
+    total_count: Number.isInteger(data?.total_count) ? data.total_count : 0,
+    filtered_count: Number.isInteger(data?.filtered_count) ? data.filtered_count : 0,
+    has_more: Boolean(data?.has_more),
+    next_cursor: data?.next_cursor ?? null,
+    last_user_message: typeof data?.last_user_message === 'string' ? data.last_user_message : '',
+  };
 }
 
-export async function sendMessage({ sessionId, nodeId = null, role = 'user', content, keepalive } = {}) {
+export async function sendMessage({
+  sessionId,
+  nodeId = null,
+  role = 'user',
+  content,
+  messageType = 'user_reply',
+  keepalive,
+} = {}) {
   if (!sessionId) {
     throw new Error('sessionId is required');
   }
   if (!role) {
     throw new Error('role is required');
   }
-  if (!content || !content.trim()) {
+  const trimmed = typeof content === 'string' ? content.trim() : '';
+  if (!trimmed) {
     throw new Error('content is required');
   }
   const body = {
     session_id: sessionId,
     role,
-    content,
+    content: trimmed,
+    message_type: messageType,
   };
   if (nodeId) {
     body.node_id = nodeId;
