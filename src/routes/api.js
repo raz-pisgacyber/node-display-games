@@ -14,6 +14,7 @@ const {
 } = require('../utils/neo4jHelpers');
 const { upsertNodeVersion, deleteNodeVersion } = require('../utils/nodeVersions');
 const { executeWithLogging, queryWithLogging } = require('../utils/mysqlLogger');
+const { ValidationError, validateMessagePayload } = require('../utils/validators');
 const {
   loadWorkingMemory,
   saveWorkingMemoryPart,
@@ -750,37 +751,32 @@ router.get('/versions/check', async (req, res, next) => {
 });
 
 router.post('/messages', async (req, res, next) => {
-  const { session_id: sessionIdRaw, node_id: nodeIdRaw = null, role: roleRaw, content, message_type: messageTypeRaw } =
-    req.body || {};
-  const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : `${sessionIdRaw || ''}`.trim();
-  const role = typeof roleRaw === 'string' ? roleRaw.trim() : '';
-  const allowedRoles = new Set(['user', 'reflector', 'planner', 'doer', 'tool_result']);
-  const allowedMessageTypes = new Set(['user_reply', 'inner_process', 'assistant_reply', 'system_notice', 'tool_result']);
-  const trimmedContent = typeof content === 'string' ? content.trim() : '';
-  if (!sessionId || !role || !trimmedContent) {
-    res.status(400).json({ error: 'session_id, role and content are required' });
+  const allowedRoles = ['user', 'reflector', 'planner', 'doer', 'tool_result'];
+  const allowedMessageTypes = ['user_reply', 'inner_process', 'assistant_reply', 'system_notice', 'tool_result'];
+  let payload;
+  try {
+    payload = validateMessagePayload(req.body, {
+      allowedRoles,
+      allowedMessageTypes,
+      defaultMessageType: 'user_reply',
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      res.status(error.status || 400).json({ error: error.message });
+      return;
+    }
+    next(error);
     return;
   }
-  if (!allowedRoles.has(role)) {
-    res.status(400).json({ error: 'Invalid role' });
-    return;
-  }
-  const messageTypeCandidate = typeof messageTypeRaw === 'string' ? messageTypeRaw.trim() : 'user_reply';
-  const messageType = allowedMessageTypes.has(messageTypeCandidate)
-    ? messageTypeCandidate
-    : 'user_reply';
-  if (!allowedMessageTypes.has(messageTypeCandidate) && messageTypeCandidate && messageTypeCandidate !== 'user_reply') {
-    res.status(400).json({ error: 'Invalid message_type' });
-    return;
-  }
-  const nodeId =
-    nodeIdRaw === null || nodeIdRaw === undefined || nodeIdRaw === '' ? null : `${nodeIdRaw}`.trim();
+
+  const { sessionId, nodeId, role, content: trimmedContent, messageType } = payload;
+  const createdAt = new Date();
   const connection = await pool.getConnection();
   try {
     const [result] = await executeWithLogging(
       connection,
-      'INSERT INTO messages (session_id, node_id, role, content, message_type) VALUES (?, ?, ?, ?, ?)',
-      [sessionId, nodeId, role, trimmedContent, messageType]
+      'INSERT INTO messages (session_id, node_id, role, message_type, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [sessionId, nodeId, role, messageType, trimmedContent, createdAt]
     );
     const insertedId = result.insertId;
     const [rows] = await executeWithLogging(
@@ -797,7 +793,7 @@ router.post('/messages', async (req, res, next) => {
         role,
         content: trimmedContent,
         message_type: messageType,
-        created_at: new Date().toISOString(),
+        created_at: createdAt.toISOString(),
       }
     );
   } catch (error) {
