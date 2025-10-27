@@ -66,6 +66,24 @@ function normaliseMessages(list) {
     .filter((message) => Boolean(message));
 }
 
+function normaliseCursor(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value);
+    return Number.isFinite(asNumber) && asNumber >= 0 ? asNumber : null;
+  }
+  const parsed = Number.parseInt(`${value}`, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
 export function getMessagesState() {
   return {
     sessionId: state.sessionId,
@@ -132,8 +150,11 @@ function buildFetchOptions({ reset, limit } = {}) {
   if (state.nodeId) {
     options.nodeId = state.nodeId;
   }
-  if (!reset && state.cursor) {
-    options.cursor = state.cursor;
+  if (!reset) {
+    const cursor = normaliseCursor(state.cursor);
+    if (cursor !== null) {
+      options.cursor = cursor;
+    }
   }
   return options;
 }
@@ -152,7 +173,8 @@ export async function fetchMessagesPage({ reset = false, limit } = {}) {
     state.messages = effectiveReset
       ? incomingMessages
       : normaliseMessages(state.messages.concat(incomingMessages));
-    state.cursor = data?.next_cursor ?? (state.messages.length ? state.messages[state.messages.length - 1].id : null);
+    const fallbackCursor = state.messages.length ? state.messages[state.messages.length - 1]?.id : null;
+    state.cursor = normaliseCursor(data?.next_cursor ?? fallbackCursor);
     state.hasMore = Boolean(data?.has_more);
     state.totalCount = Number.isInteger(data?.total_count) ? data.total_count : state.messages.length;
     state.filteredCount = Number.isInteger(data?.filtered_count)

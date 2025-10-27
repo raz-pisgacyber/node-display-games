@@ -814,26 +814,63 @@ router.get('/messages', async (req, res, next) => {
     res.status(400).json({ error: 'session_id is required' });
     return;
   }
+
   const nodeIdRaw = req.query?.node_id;
-  const nodeId =
-    nodeIdRaw === undefined || nodeIdRaw === null || nodeIdRaw === '' ? null : `${nodeIdRaw}`.trim();
+  let nodeId = null;
+  if (nodeIdRaw !== undefined && nodeIdRaw !== null && nodeIdRaw !== '') {
+    if (typeof nodeIdRaw === 'string') {
+      const trimmedNodeId = nodeIdRaw.trim();
+      nodeId = trimmedNodeId || null;
+    } else if (typeof nodeIdRaw === 'number' || typeof nodeIdRaw === 'bigint') {
+      nodeId = `${nodeIdRaw}`;
+    } else {
+      console.warn('GET /api/messages received non-string node_id. Defaulting to null.', {
+        sessionId,
+        providedType: typeof nodeIdRaw,
+      });
+    }
+  }
+
   const cursorRaw = req.query?.cursor;
-  const parsedCursor = Number.parseInt(cursorRaw ?? '', 10);
-  const cursor = Number.isNaN(parsedCursor) || parsedCursor < 0 ? null : parsedCursor;
-  const rawLimit = Number.parseInt(req.query?.limit ?? 50, 10);
-  const cappedLimit = parseLimitParam(rawLimit, 50, 200);
+  let cursor = null;
+  if (cursorRaw !== undefined && cursorRaw !== null && cursorRaw !== '') {
+    const cursorValue = typeof cursorRaw === 'number' ? cursorRaw : Number.parseInt(`${cursorRaw}`, 10);
+    if (Number.isFinite(cursorValue) && cursorValue >= 0) {
+      cursor = cursorValue;
+    } else {
+      console.warn('GET /api/messages received invalid cursor. Defaulting to null.', {
+        sessionId,
+        providedCursor: cursorRaw,
+      });
+    }
+  }
+
+  const limitRaw = req.query?.limit;
+  let requestedLimit = 50;
+  if (limitRaw !== undefined && limitRaw !== null && limitRaw !== '') {
+    const parsedLimit = typeof limitRaw === 'number' ? limitRaw : Number.parseInt(`${limitRaw}`, 10);
+    if (Number.isFinite(parsedLimit)) {
+      requestedLimit = parsedLimit;
+    } else {
+      console.warn('GET /api/messages received invalid limit. Defaulting to 50.', {
+        sessionId,
+        providedLimit: limitRaw,
+      });
+    }
+  }
+  const cappedLimit = parseLimitParam(requestedLimit, 50, 200);
   const connection = await pool.getConnection();
   try {
     let filterClause = 'WHERE session_id = ?';
     const filterParams = [sessionId];
-    if (nodeId) {
+    if (typeof nodeId === 'string' && nodeId) {
       filterClause += ' AND (node_id = ? OR node_id IS NULL)';
       filterParams.push(nodeId);
     }
 
     const paginationParams = filterParams.slice();
     let cursorClause = '';
-    if (cursor) {
+    if (cursor !== null) {
       cursorClause = ' AND id > ?';
       paginationParams.push(cursor);
     }
@@ -848,7 +885,12 @@ router.get('/messages', async (req, res, next) => {
     );
     const hasMore = rows.length > cappedLimit;
     const messages = hasMore ? rows.slice(0, cappedLimit) : rows;
-    const nextCursor = messages.length ? String(messages[messages.length - 1].id) : cursor ? String(cursor) : null;
+    const nextCursor =
+      messages.length > 0
+        ? String(messages[messages.length - 1].id)
+        : cursor !== null
+        ? String(cursor)
+        : null;
 
     const [totalRows] = await executeWithLogging(
       connection,
@@ -858,7 +900,7 @@ router.get('/messages', async (req, res, next) => {
     const totalCount = Number(totalRows?.[0]?.total_count ?? 0);
 
     let filteredCount = totalCount;
-    if (nodeId) {
+    if (typeof nodeId === 'string' && nodeId) {
       const [filteredRows] = await executeWithLogging(
         connection,
         'SELECT COUNT(*) AS filtered_count FROM messages WHERE session_id = ? AND (node_id = ? OR node_id IS NULL)',

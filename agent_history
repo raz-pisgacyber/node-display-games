@@ -285,3 +285,10 @@
   - Updated message persistence to record explicit `message_type` and `created_at` values in column order aligned with the new bindings.
   - Normalised builder message flows so chat payloads preserve their `message_type` when sending, caching, and syncing into working memory.
 - Verification: Not run (database services unavailable in the execution environment).
+## 2025-11-27 22:00 UTC
+- Files modified: `modules/common/api.js`, `modules/common/messagesStore.js`, `src/routes/api.js`.
+- Completed tasks:
+  - Normalised `/api/messages` query parameters to guard against invalid cursors, limits, and node identifiers while keeping SQL placeholder counts aligned with supplied parameters.
+  - Updated the client API wrapper and shared messages store so cursors are treated as finite numbers, preventing accidental string values from reaching the server.
+  - Ensured pagination state persists with numeric cursors and only appends SQL cursor clauses when corresponding parameters are bound.
+- Verification: `npm start` *(fails: requires MySQL at localhost:3306)*.
