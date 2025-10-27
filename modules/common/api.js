@@ -147,11 +147,17 @@ export async function fetchMessages(sessionId, { nodeId, limit, cursor } = {}) {
   if (nodeId) {
     params.set('node_id', nodeId);
   }
-  if (limit) {
-    params.set('limit', String(limit));
+  if (limit !== undefined && limit !== null) {
+    const limitValue = typeof limit === 'number' ? limit : Number.parseInt(`${limit}`, 10);
+    if (Number.isFinite(limitValue) && limitValue > 0) {
+      params.set('limit', String(limitValue));
+    }
   }
-  if (cursor) {
-    params.set('cursor', String(cursor));
+  if (cursor !== undefined && cursor !== null) {
+    const cursorValue = typeof cursor === 'number' ? cursor : Number.parseInt(`${cursor}`, 10);
+    if (Number.isFinite(cursorValue) && cursorValue >= 0) {
+      params.set('cursor', String(cursorValue));
+    }
   }
   const data = await fetchJSON(`/api/messages?${params.toString()}`);
   return {
