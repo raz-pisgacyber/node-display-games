@@ -10,6 +10,16 @@ const DEFAULT_CONFIG = {
 
 const MAX_HISTORY_LENGTH = 200;
 
+function defaultMessagesMeta() {
+  return {
+    total_count: 0,
+    filtered_count: 0,
+    has_more: false,
+    next_cursor: null,
+    last_user_message: '',
+  };
+}
+
 function safeString(value) {
   if (value === null || value === undefined) {
     return '';
@@ -309,6 +319,7 @@ function sanitiseMessage(message) {
         ? null
         : safeString(message.node_id),
     role: safeString(message.role || 'user'),
+    message_type: safeString(message.message_type || ''),
     content: safeString(message.content || ''),
     created_at: createdAt,
   };
@@ -345,6 +356,43 @@ function deriveLastUserMessage(messages) {
   return '';
 }
 
+function sanitiseMessagesMeta(meta = {}, { lastUserMessageFallback } = {}) {
+  if (!meta || typeof meta !== 'object') {
+    const fallback = defaultMessagesMeta();
+    if (lastUserMessageFallback) {
+      fallback.last_user_message = safeString(lastUserMessageFallback);
+    }
+    return fallback;
+  }
+  const result = defaultMessagesMeta();
+  const totalCount = Number.parseInt(meta.total_count, 10);
+  if (!Number.isNaN(totalCount) && totalCount >= 0) {
+    result.total_count = totalCount;
+  }
+  const filteredCount = Number.parseInt(meta.filtered_count, 10);
+  if (!Number.isNaN(filteredCount) && filteredCount >= 0) {
+    result.filtered_count = filteredCount;
+  }
+  if (meta.has_more !== undefined) {
+    result.has_more = Boolean(meta.has_more);
+  }
+  const cursorValue = meta.next_cursor ?? meta.cursor ?? null;
+  if (cursorValue !== null && cursorValue !== undefined && cursorValue !== '') {
+    result.next_cursor = safeString(cursorValue);
+  }
+  const resolvedLastUser =
+    typeof meta.last_user_message === 'string' && meta.last_user_message.trim()
+      ? safeString(meta.last_user_message)
+      : lastUserMessageFallback
+      ? safeString(lastUserMessageFallback)
+      : '';
+  result.last_user_message = resolvedLastUser;
+  if (typeof meta.last_synced_at === 'string' && meta.last_synced_at.trim()) {
+    result.last_synced_at = meta.last_synced_at;
+  }
+  return result;
+}
+
 function buildDefaultMemory(overrides = {}) {
   const timestamp = new Date().toISOString();
   const config = {
@@ -361,9 +409,16 @@ function buildDefaultMemory(overrides = {}) {
     ),
   };
   const messages = limitMessages(overrides.messages, config.history_length);
-  const lastUserMessage = overrides.last_user_message
+  const fallbackLastUser = overrides.last_user_message
     ? safeString(overrides.last_user_message)
     : deriveLastUserMessage(messages);
+  const messagesMeta = sanitiseMessagesMeta(overrides.messages_meta, {
+    lastUserMessageFallback: fallbackLastUser,
+  });
+  if (!messagesMeta.last_user_message && fallbackLastUser) {
+    messagesMeta.last_user_message = fallbackLastUser;
+  }
+  const lastUserMessage = messagesMeta.last_user_message || fallbackLastUser;
   const projectStructure = sanitiseStructureFromParts({
     projectGraph: overrides.project_graph,
     elementsGraph: overrides.elements_graph,
@@ -382,6 +437,7 @@ function buildDefaultMemory(overrides = {}) {
     fetched_context: sanitiseFetchedContext(overrides.fetched_context),
     working_history: typeof overrides.working_history === 'string' ? overrides.working_history : '',
     messages,
+    messages_meta: messagesMeta,
     last_user_message: lastUserMessage,
     config,
   };
@@ -409,9 +465,18 @@ function sanitiseMemorySnapshot(snapshot, currentMemory = null) {
     ),
   };
   const messages = limitMessages(snapshot.messages, config.history_length);
-  const lastUserMessage = snapshot.last_user_message
+  const fallbackLastUser = snapshot.last_user_message
     ? safeString(snapshot.last_user_message)
-    : deriveLastUserMessage(messages);
+    : base.messages_meta?.last_user_message || base.last_user_message || deriveLastUserMessage(messages);
+  const messagesMetaSource =
+    snapshot.messages_meta !== undefined ? snapshot.messages_meta : base.messages_meta;
+  const messagesMeta = sanitiseMessagesMeta(messagesMetaSource, {
+    lastUserMessageFallback: fallbackLastUser,
+  });
+  if (!messagesMeta.last_user_message && fallbackLastUser) {
+    messagesMeta.last_user_message = fallbackLastUser;
+  }
+  const lastUserMessage = messagesMeta.last_user_message || fallbackLastUser;
   const projectStructure = sanitiseStructureFromParts({
     projectGraph: snapshot.project_graph,
     elementsGraph: snapshot.elements_graph,
@@ -432,6 +497,7 @@ function sanitiseMemorySnapshot(snapshot, currentMemory = null) {
     fetched_context: sanitiseFetchedContext(snapshot.fetched_context ?? base.fetched_context),
     working_history: typeof snapshot.working_history === 'string' ? snapshot.working_history : '',
     messages,
+    messages_meta: messagesMeta,
     last_user_message: lastUserMessage,
     config,
   };
@@ -457,7 +523,14 @@ function applyConfigVisibility(target) {
     target.working_history = '';
   }
   target.messages = limitMessages(target.messages, target.config.history_length);
-  target.last_user_message = deriveLastUserMessage(target.messages);
+  target.messages_meta = sanitiseMessagesMeta(target.messages_meta, {
+    lastUserMessageFallback: deriveLastUserMessage(target.messages),
+  });
+  if (!target.messages_meta.last_user_message) {
+    target.messages_meta.last_user_message = deriveLastUserMessage(target.messages);
+  }
+  target.last_user_message =
+    target.messages_meta.last_user_message || deriveLastUserMessage(target.messages);
 }
 
 const memoryListeners = new Set();
@@ -679,7 +752,21 @@ function buildNodeScopedSnapshot(snapshot, nodeId) {
   scoped.messages = Array.isArray(snapshot.messages)
     ? snapshot.messages.filter((message) => !message.node_id || message.node_id === targetId)
     : [];
-  scoped.last_user_message = deriveLastUserMessage(scoped.messages);
+  const metaFallback = sanitiseMessagesMeta(snapshot.messages_meta, {
+    lastUserMessageFallback: snapshot.last_user_message || deriveLastUserMessage(snapshot.messages || []),
+  });
+  const scopedMeta = {
+    ...metaFallback,
+    filtered_count: scoped.messages.length,
+  };
+  const scopedLastUser = scoped.messages.length
+    ? deriveLastUserMessage(scoped.messages)
+    : scopedMeta.last_user_message;
+  scoped.messages_meta = sanitiseMessagesMeta(
+    { ...scopedMeta, last_user_message: scopedLastUser },
+    { lastUserMessageFallback: scopedLastUser }
+  );
+  scoped.last_user_message = scoped.messages_meta.last_user_message;
   return scoped;
 }
 
@@ -884,17 +971,32 @@ export function setWorkingMemoryFetchedContext(context) {
   return getWorkingMemorySnapshot();
 }
 
-export function setWorkingMemoryMessages(messages) {
-  const next = limitMessages(messages, memory.config.history_length);
-  if (JSON.stringify(memory.messages) === JSON.stringify(next)) {
+export function setWorkingMemoryMessages(messages, metadata = null) {
+  const nextMessages = limitMessages(messages, memory.config.history_length);
+  const metaSource = metadata === null || metadata === undefined ? memory.messages_meta : metadata;
+  const sanitisedMeta = sanitiseMessagesMeta(metaSource, {
+    lastUserMessageFallback: deriveLastUserMessage(nextMessages),
+  });
+  if (!sanitisedMeta.last_user_message) {
+    sanitisedMeta.last_user_message = deriveLastUserMessage(nextMessages);
+  }
+  const resolvedLastUser = sanitisedMeta.last_user_message || deriveLastUserMessage(nextMessages);
+  const messagesChanged = JSON.stringify(memory.messages) !== JSON.stringify(nextMessages);
+  const metaChanged = JSON.stringify(memory.messages_meta) !== JSON.stringify(sanitisedMeta);
+  const lastUserChanged = memory.last_user_message !== resolvedLastUser;
+  if (!messagesChanged && !metaChanged && !lastUserChanged) {
     return getWorkingMemorySnapshot();
   }
-  memory.messages = next;
-  memory.last_user_message = deriveLastUserMessage(next);
+  memory.messages = nextMessages;
+  memory.messages_meta = sanitisedMeta;
+  memory.last_user_message = resolvedLastUser;
   updateTimestamp();
   notifyMemory();
-  persistPart('messages', next, { historyLength: memory.config.history_length });
-  persistPart('last_user_message', memory.last_user_message, { messages: next });
+  persistPart('messages_meta', sanitisedMeta);
+  persistPart('last_user_message', memory.last_user_message, {
+    messages: nextMessages,
+    metadata: sanitisedMeta,
+  });
   return getWorkingMemorySnapshot();
 }
 
@@ -1003,10 +1105,11 @@ export function subscribeWorkingMemorySettings(listener) {
   };
 }
 
-export function appendWorkingMemoryMessage(message) {
+export function appendWorkingMemoryMessage(message, metadata = null) {
   const existing = Array.isArray(memory.messages) ? memory.messages.slice() : [];
   existing.push(message);
-  setWorkingMemoryMessages(existing);
+  const metaSource = metadata === null || metadata === undefined ? memory.messages_meta : metadata;
+  setWorkingMemoryMessages(existing, metaSource);
 }
 
 export function getStoredSession() {

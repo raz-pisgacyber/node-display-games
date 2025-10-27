@@ -270,3 +270,11 @@
   - Updated the front-end project and elements builders to hydrate working memory immediately from the full graph response, eliminating the late refresh that previously wiped state when switching surfaces.
   - Taught the project-structure service to accept prebuilt snapshots, reuse cached data, and avoid redundant fetches while still supporting rebuilds after structural mutations.
 - Verification: Not run (no automated test suite available).
+
+## 2025-11-27 16:30 UTC
+- Files modified: `modules/common/api.js`, `modules/common/messagesStore.js`, `modules/common/workingMemory.js`, `modules/main/main.js`, `src/routes/api.js`, `src/utils/workingMemorySchema.js`, `src/utils/workingMemoryStore.js`.
+- Completed tasks:
+  - Stopped persisting full message transcripts in working memory by introducing metadata-only storage (`messages_meta`), normalising helpers, and routing writes through the updated schema/store utilities.
+  - Extended `/api/messages` to validate role/type enums, serve ascending pagination with cursors, and include total/filtered counts alongside the latest user message in the response payload.
+  - Rebuilt the main module’s message flow around a dedicated API-backed messages store so UI rendering and working-memory syncs consume server-sourced transcripts and metadata consistently.
+- Verification: Not run (manual reasoning only).

@@ -14,7 +14,7 @@ const WORKING_MEMORY_PARTS = new Set([
   'node_context',
   'fetched_context',
   'working_history',
-  'messages',
+  'messages_meta',
   'last_user_message',
   'config',
 ]);
@@ -295,6 +295,7 @@ function sanitiseMessage(message) {
         ? null
         : safeString(message.node_id),
     role: safeString(message.role || 'user'),
+    message_type: safeString(message.message_type || ''),
     content: safeString(message.content || ''),
     created_at,
   };
@@ -332,6 +333,46 @@ function deriveLastUserMessage(messages) {
     }
   }
   return '';
+}
+
+function sanitiseMessagesMeta(meta = {}, { lastUserMessageFallback } = {}) {
+  const source = ensureObject(meta);
+  const totalCountRaw = Number.parseInt(source.total_count, 10);
+  const filteredCountRaw = Number.parseInt(source.filtered_count, 10);
+  const nextCursorRaw = source.next_cursor ?? source.cursor ?? null;
+  const lastUserRaw =
+    typeof source.last_user_message === 'string' ? source.last_user_message : undefined;
+  const lastSyncedRaw =
+    typeof source.last_synced_at === 'string' && source.last_synced_at.trim()
+      ? source.last_synced_at
+      : undefined;
+  const hasMore = Boolean(source.has_more);
+
+  const totalCount = Number.isNaN(totalCountRaw) || totalCountRaw < 0 ? 0 : totalCountRaw;
+  const filteredCount =
+    Number.isNaN(filteredCountRaw) || filteredCountRaw < 0 ? 0 : filteredCountRaw;
+  const nextCursor =
+    nextCursorRaw === null || nextCursorRaw === undefined || nextCursorRaw === ''
+      ? null
+      : safeString(nextCursorRaw);
+  const resolvedLastUser =
+    lastUserRaw !== undefined && lastUserRaw !== null && lastUserRaw !== ''
+      ? safeString(lastUserRaw)
+      : lastUserMessageFallback || '';
+
+  const result = {
+    total_count: totalCount,
+    filtered_count: filteredCount,
+    has_more: hasMore,
+    next_cursor: nextCursor,
+    last_user_message: resolvedLastUser,
+  };
+
+  if (lastSyncedRaw) {
+    result.last_synced_at = lastSyncedRaw;
+  }
+
+  return result;
 }
 
 function sanitiseLastUserMessage(value, { messages } = {}) {
@@ -406,8 +447,8 @@ function sanitiseWorkingMemoryPart(part, value, options = {}) {
       return sanitiseFetchedContext(value);
     case 'working_history':
       return sanitiseWorkingHistory(value);
-    case 'messages':
-      return sanitiseMessages(value, { historyLength: options.historyLength });
+    case 'messages_meta':
+      return sanitiseMessagesMeta(value, { lastUserMessageFallback: options.lastUserMessage });
     case 'last_user_message':
       return sanitiseLastUserMessage(value, { messages: options.messages });
     case 'config':
@@ -437,6 +478,9 @@ function buildDefaultMemory(overrides = {}) {
     fetched_context: sanitiseFetchedContext(overrides.fetched_context),
     working_history: sanitiseWorkingHistory(overrides.working_history),
     messages: sanitiseMessages(overrides.messages, { historyLength: config.history_length }),
+    messages_meta: sanitiseMessagesMeta(overrides.messages_meta, {
+      lastUserMessageFallback: overrides.last_user_message,
+    }),
     last_user_message: sanitiseLastUserMessage(overrides.last_user_message, {
       messages: overrides.messages,
     }),
@@ -515,12 +559,27 @@ function composeWorkingMemory(parts = {}, existingMemory = {}) {
     historyLength: config.history_length,
   });
 
+  const metaSource = hasOwn(resolvedParts, 'messages_meta')
+    ? resolvedParts.messages_meta
+    : hasOwn(resolvedExisting, 'messages_meta')
+    ? resolvedExisting.messages_meta
+    : defaults.messages_meta;
+  const baseMeta = sanitiseMessagesMeta(metaSource, {
+    lastUserMessageFallback: deriveLastUserMessage(messages),
+  });
+
   const lastUserMessageSource = hasOwn(resolvedParts, 'last_user_message')
     ? resolvedParts.last_user_message
+    : hasOwn(baseMeta, 'last_user_message')
+    ? baseMeta.last_user_message
     : hasOwn(resolvedExisting, 'last_user_message')
     ? resolvedExisting.last_user_message
     : undefined;
   const lastUserMessage = sanitiseLastUserMessage(lastUserMessageSource, { messages });
+  const messagesMeta = sanitiseMessagesMeta(
+    { ...baseMeta, last_user_message: lastUserMessage },
+    { lastUserMessageFallback: lastUserMessage }
+  );
 
   return {
     session,
@@ -529,6 +588,7 @@ function composeWorkingMemory(parts = {}, existingMemory = {}) {
     fetched_context: fetchedContext,
     working_history: workingHistory,
     messages,
+    messages_meta: messagesMeta,
     last_user_message: lastUserMessage || deriveLastUserMessage(messages),
     config,
   };
@@ -556,4 +616,5 @@ module.exports = {
   composeWorkingMemory,
   normaliseWorkingMemory,
   deriveLastUserMessage,
+  sanitiseMessagesMeta,
 };

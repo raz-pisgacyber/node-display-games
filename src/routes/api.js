@@ -750,9 +750,14 @@ router.get('/versions/check', async (req, res, next) => {
 });
 
 router.post('/messages', async (req, res, next) => {
-  const { session_id, node_id = null, role, content } = req.body || {};
+  const { session_id: sessionIdRaw, node_id: nodeIdRaw = null, role: roleRaw, content, message_type: messageTypeRaw } =
+    req.body || {};
+  const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : `${sessionIdRaw || ''}`.trim();
+  const role = typeof roleRaw === 'string' ? roleRaw.trim() : '';
   const allowedRoles = new Set(['user', 'reflector', 'planner', 'doer', 'tool_result']);
-  if (!session_id || !role || !content) {
+  const allowedMessageTypes = new Set(['user_reply', 'inner_process', 'assistant_reply', 'system_notice', 'tool_result']);
+  const trimmedContent = typeof content === 'string' ? content.trim() : '';
+  if (!sessionId || !role || !trimmedContent) {
     res.status(400).json({ error: 'session_id, role and content are required' });
     return;
   }
@@ -760,42 +765,131 @@ router.post('/messages', async (req, res, next) => {
     res.status(400).json({ error: 'Invalid role' });
     return;
   }
+  const messageTypeCandidate = typeof messageTypeRaw === 'string' ? messageTypeRaw.trim() : 'user_reply';
+  const messageType = allowedMessageTypes.has(messageTypeCandidate)
+    ? messageTypeCandidate
+    : 'user_reply';
+  if (!allowedMessageTypes.has(messageTypeCandidate) && messageTypeCandidate && messageTypeCandidate !== 'user_reply') {
+    res.status(400).json({ error: 'Invalid message_type' });
+    return;
+  }
+  const nodeId =
+    nodeIdRaw === null || nodeIdRaw === undefined || nodeIdRaw === '' ? null : `${nodeIdRaw}`.trim();
+  const connection = await pool.getConnection();
   try {
     const [result] = await executeWithLogging(
-      pool,
-      `INSERT INTO messages (session_id, node_id, role, content) VALUES (?, ?, ?, ?)` ,
-      [session_id, node_id, role, content]
+      connection,
+      'INSERT INTO messages (session_id, node_id, role, content, message_type) VALUES (?, ?, ?, ?, ?)',
+      [sessionId, nodeId, role, trimmedContent, messageType]
     );
-    res.status(201).json({ id: result.insertId, session_id, node_id, role, content });
+    const insertedId = result.insertId;
+    const [rows] = await executeWithLogging(
+      connection,
+      'SELECT id, session_id, node_id, role, content, message_type, created_at FROM messages WHERE id = ?',
+      [insertedId]
+    );
+    const saved = rows && rows.length ? rows[0] : null;
+    res.status(201).json(
+      saved || {
+        id: insertedId,
+        session_id: sessionId,
+        node_id: nodeId,
+        role,
+        content: trimmedContent,
+        message_type: messageType,
+        created_at: new Date().toISOString(),
+      }
+    );
   } catch (error) {
     next(error);
+  } finally {
+    connection.release();
   }
 });
 
 router.get('/messages', async (req, res, next) => {
-  const { session_id, node_id, limit = 50, before } = req.query;
-  if (!session_id) {
+  const sessionIdRaw = req.query?.session_id;
+  if (!sessionIdRaw) {
     res.status(400).json({ error: 'session_id is required' });
     return;
   }
-  const rawLimit = Number.parseInt(limit ?? 50, 10);
+  const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : `${sessionIdRaw}`.trim();
+  if (!sessionId) {
+    res.status(400).json({ error: 'session_id is required' });
+    return;
+  }
+  const nodeIdRaw = req.query?.node_id;
+  const nodeId =
+    nodeIdRaw === undefined || nodeIdRaw === null || nodeIdRaw === '' ? null : `${nodeIdRaw}`.trim();
+  const cursorRaw = req.query?.cursor;
+  const parsedCursor = Number.parseInt(cursorRaw ?? '', 10);
+  const cursor = Number.isNaN(parsedCursor) || parsedCursor < 0 ? null : parsedCursor;
+  const rawLimit = Number.parseInt(req.query?.limit ?? 50, 10);
   const cappedLimit = parseLimitParam(rawLimit, 50, 200);
-  const params = [session_id];
-  let sql = 'SELECT * FROM messages WHERE session_id = ?';
-  if (node_id) {
-    sql += ' AND (node_id = ? OR node_id IS NULL)';
-    params.push(node_id);
-  }
-  if (before) {
-    sql += ' AND created_at < ?';
-    params.push(before);
-  }
-  sql += ` ORDER BY created_at DESC LIMIT ${cappedLimit}`;
+  const connection = await pool.getConnection();
   try {
-    const [rows] = await executeWithLogging(pool, sql, params);
-    res.json({ messages: rows });
+    let filterClause = 'WHERE session_id = ?';
+    const filterParams = [sessionId];
+    if (nodeId) {
+      filterClause += ' AND (node_id = ? OR node_id IS NULL)';
+      filterParams.push(nodeId);
+    }
+
+    const paginationParams = filterParams.slice();
+    let cursorClause = '';
+    if (cursor) {
+      cursorClause = ' AND id > ?';
+      paginationParams.push(cursor);
+    }
+
+    const [rows] = await executeWithLogging(
+      connection,
+      `SELECT id, session_id, node_id, role, content, message_type, created_at
+       FROM messages ${filterClause}${cursorClause}
+       ORDER BY id ASC
+       LIMIT ?`,
+      [...paginationParams, cappedLimit + 1]
+    );
+    const hasMore = rows.length > cappedLimit;
+    const messages = hasMore ? rows.slice(0, cappedLimit) : rows;
+    const nextCursor = messages.length ? String(messages[messages.length - 1].id) : cursor ? String(cursor) : null;
+
+    const [totalRows] = await executeWithLogging(
+      connection,
+      'SELECT COUNT(*) AS total_count FROM messages WHERE session_id = ?',
+      [sessionId]
+    );
+    const totalCount = Number(totalRows?.[0]?.total_count ?? 0);
+
+    let filteredCount = totalCount;
+    if (nodeId) {
+      const [filteredRows] = await executeWithLogging(
+        connection,
+        'SELECT COUNT(*) AS filtered_count FROM messages WHERE session_id = ? AND (node_id = ? OR node_id IS NULL)',
+        [sessionId, nodeId]
+      );
+      filteredCount = Number(filteredRows?.[0]?.filtered_count ?? 0);
+    }
+
+    const [lastUserRows] = await executeWithLogging(
+      connection,
+      "SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+      [sessionId]
+    );
+    const lastUserMessage = lastUserRows && lastUserRows.length ? lastUserRows[0].content || '' : '';
+
+    res.json({
+      messages,
+      total_count: totalCount,
+      filtered_count: filteredCount,
+      has_more: hasMore,
+      next_cursor: nextCursor,
+      last_user_message: lastUserMessage || '',
+    });
   } catch (error) {
     next(error);
+  } finally {
+    connection.release();
   }
 });
 
