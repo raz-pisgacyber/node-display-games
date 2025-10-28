@@ -1,6 +1,7 @@
 const config = require('../config');
 const { pool } = require('../db/mysql');
 const { queryWithLogging, executeWithLogging } = require('./mysqlLogger');
+const { saveNodeWorkingHistory } = require('./mysqlQueries');
 const {
   WORKING_MEMORY_PARTS,
   DERIVED_WORKING_MEMORY_PARTS,
@@ -167,6 +168,17 @@ async function saveWorkingMemoryPart({
       name,
       value: sanitised,
     });
+    if (name === 'working_history' && targetProjectId) {
+      const rawNodeId = options.nodeId ?? options.node_id;
+      const nodeId = rawNodeId === undefined || rawNodeId === null ? '' : `${rawNodeId}`.trim();
+      if (nodeId) {
+        await saveNodeWorkingHistory(existingConnection, {
+          projectId: targetProjectId,
+          nodeId,
+          workingHistory: sanitised,
+        });
+      }
+    }
     return { part: name, value: sanitised };
   } finally {
     if (!connection) {

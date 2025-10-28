@@ -22,6 +22,7 @@ const {
   fetchWorkingHistoryForNode,
   fetchLatestSummaryText,
   fetchSessionById,
+  saveNodeWorkingHistory,
 } = require('../utils/mysqlQueries');
 const { ValidationError, validateMessagePayload } = require('../utils/validators');
 const {
@@ -148,6 +149,56 @@ router.patch('/working-memory/:part', async (req, res, next) => {
     res.json(result);
   } catch (error) {
     next(error);
+  }
+});
+
+router.post('/node-working-history', async (req, res, next) => {
+  const body = ensureObject(req.body);
+  const projectIdRaw = body.project_id;
+  const nodeIdRaw = body.node_id;
+  const workingHistoryRaw = body.working_history;
+
+  const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  if (!projectId) {
+    res.status(400).json({ error: 'project_id is required' });
+    return;
+  }
+
+  const nodeId = typeof nodeIdRaw === 'string' ? nodeIdRaw.trim() : '';
+  if (!nodeId) {
+    res.status(400).json({ error: 'node_id is required' });
+    return;
+  }
+
+  let workingHistoryText = '';
+  if (workingHistoryRaw !== undefined && workingHistoryRaw !== null) {
+    if (typeof workingHistoryRaw === 'string') {
+      workingHistoryText = workingHistoryRaw;
+    } else {
+      try {
+        workingHistoryText = JSON.stringify(workingHistoryRaw);
+      } catch (error) {
+        workingHistoryText = '';
+      }
+    }
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await saveNodeWorkingHistory(connection, {
+      projectId,
+      nodeId,
+      workingHistory: workingHistoryText,
+    });
+    res.json({
+      project_id: projectId,
+      node_id: nodeId,
+      working_history: workingHistoryText,
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    connection.release();
   }
 });
 

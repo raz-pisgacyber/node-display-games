@@ -1,4 +1,4 @@
-import { fetchJSON, fetchWorkingMemoryContext } from './api.js';
+import { fetchJSON, fetchWorkingMemoryContext, updateNodeWorkingHistory } from './api.js';
 
 const DEFAULT_CONFIG = {
   history_length: 20,
@@ -1144,7 +1144,31 @@ export function setWorkingMemoryWorkingHistory(value) {
   memory.working_history = next;
   updateTimestamp();
   notifyMemory();
-  persistPart('working_history', next);
+  const activeNodeId = safeString(memory.session?.active_node_id).trim();
+  const projectId = safeString(memory.session?.project_id).trim();
+  const persistPromise = persistPart(
+    'working_history',
+    next,
+    activeNodeId ? { nodeId: activeNodeId } : undefined
+  );
+  if (
+    activeNodeId &&
+    projectId &&
+    persistPromise &&
+    typeof persistPromise.then === 'function'
+  ) {
+    persistPromise
+      .then(() =>
+        updateNodeWorkingHistory({
+          projectId,
+          nodeId: activeNodeId,
+          workingHistory: next,
+        })
+      )
+      .catch((error) => {
+        console.warn('Failed to sync node working history', error);
+      });
+  }
   return getWorkingMemorySnapshot();
 }
 

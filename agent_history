@@ -359,3 +359,10 @@
 Summary of work completed: Authored a follow-up remediation plan covering the missing working-history writes, message node_id enforcement, and legacy data backfill to address the tech lead’s feedback.
 Key implementation details or architectural notes: Documented client/server touchpoints that currently skip `node_working_history`, proposed shared SQL helpers and REST endpoints for synchronised persistence, and outlined migration plus regression coverage steps ensuring every node restores accurate history.
 Next steps or handoff notes: Implement the plan in stages—start with the new persistence endpoint and working-memory store updates, then tackle message validation and historical backfills before adding automated tests.
+## 2025-11-30 22:30 UTC
+- Files modified: `modules/common/api.js`, `modules/common/workingMemory.js`, `src/routes/api.js`, `src/utils/mysqlQueries.js`, `src/utils/workingMemoryStore.js`.
+- Completed tasks:
+  - Added a browser helper for updating node working history and wired working-memory updates to call it after successful persistence when an active node is present.
+  - Introduced `/api/node-working-history` along with shared MySQL helpers so both REST and working-memory flows upsert history into `node_working_history`.
+  - Ensured working-memory persistence includes node identifiers, allowing browser and MCP pathways to keep node history in sync.
+- Verification: Not run *(database-backed endpoints require external services in this environment).* 

@@ -99,6 +99,35 @@ function withProjectId(payload, projectId) {
   return { ...payload, project_id: projectId };
 }
 
+export async function updateNodeWorkingHistory({ projectId, nodeId, workingHistory }) {
+  const trimmedNodeId = nodeId === undefined || nodeId === null ? '' : `${nodeId}`.trim();
+  if (!trimmedNodeId) {
+    throw new Error('nodeId is required');
+  }
+  const trimmedProjectId = projectId === undefined || projectId === null ? '' : `${projectId}`.trim();
+  let workingHistoryText = '';
+  if (workingHistory !== undefined && workingHistory !== null) {
+    workingHistoryText = typeof workingHistory === 'string'
+      ? workingHistory
+      : (() => {
+          try {
+            return JSON.stringify(workingHistory);
+          } catch (error) {
+            return '';
+          }
+        })();
+  }
+  const body = {
+    project_id: trimmedProjectId,
+    node_id: trimmedNodeId,
+    working_history: workingHistoryText,
+  };
+  return fetchJSON('/api/node-working-history', {
+    method: 'POST',
+    body,
+  });
+}
+
 export async function fetchGraph(projectId) {
   if (projectId !== undefined && projectId !== null) {
     const value = `${projectId}`.trim();
