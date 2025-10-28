@@ -386,7 +386,10 @@ function buildProjectStructurePayload() {
 function syncWorkingMemoryProjectStructure() {
   const payload = buildProjectStructurePayload();
   if (state.projectId) {
-    setWorkingMemorySession({ project_id: state.projectId });
+    const result = setWorkingMemorySession({ project_id: state.projectId });
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => console.warn('Failed to update working memory project scope', error));
+    }
   }
   setWorkingMemoryProjectGraph(payload.project_graph);
   setWorkingMemoryElementsGraph(payload.elements_graph);
@@ -417,11 +420,9 @@ function syncWorkingMemoryNodeContext() {
   const context = buildNodeContextPayload();
   if (!context) {
     setWorkingMemoryNodeContext({});
-    setWorkingMemorySession({ active_node_id: '' });
     return;
   }
   setWorkingMemoryNodeContext(context);
-  setWorkingMemorySession({ active_node_id: context.id });
 }
 
 function syncWorkingMemoryMessages() {
@@ -460,14 +461,24 @@ function resetWorkingMemoryForProject(projectId) {
   setWorkingMemoryNodeContext({});
   setWorkingMemoryMessages([], buildDefaultMessagesMeta());
   setWorkingMemoryWorkingHistory('');
-  setWorkingMemorySession({ project_id: projectId || '', active_node_id: '' });
+  const result = setWorkingMemorySession({ project_id: projectId || '', active_node_id: '' });
+  if (result && typeof result.then === 'function') {
+    result.catch((error) => console.warn('Failed to reset working memory session', error));
+  }
 }
 
 function syncWorkingMemorySession() {
   const sessionId = state.session?.id ? String(state.session.id) : '';
   const projectId = state.projectId || state.session?.project_id || '';
   const activeNode = state.selectedNodeId || state.session?.active_node || '';
-  setWorkingMemorySession({ session_id: sessionId, project_id: projectId, active_node_id: activeNode });
+  const result = setWorkingMemorySession({
+    session_id: sessionId,
+    project_id: projectId,
+    active_node_id: activeNode,
+  });
+  if (result && typeof result.then === 'function') {
+    result.catch((error) => console.warn('Failed to sync working memory session', error));
+  }
 }
 
 async function fetchJSON(url, options = {}) {
@@ -2151,14 +2162,23 @@ function initialiseUI() {
   ui.checkpointsPanel = root.querySelector('[data-checkpoints-panel]');
 
   ui.addNodeButton?.addEventListener('click', handleAddNode);
-  ui.workingMemoryButton?.addEventListener('click', () => {
+  ui.workingMemoryButton?.addEventListener('click', async () => {
     syncWorkingMemoryProjectStructure();
     syncWorkingMemoryNodeContext();
-    syncWorkingMemoryWorkingHistory();
-    syncWorkingMemoryMessages();
     const activeNodeId = state.selectedNodeId || '';
-    setWorkingMemorySession({ active_node_id: activeNodeId });
-    openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeNodeId });
+    try {
+      await setWorkingMemorySession({
+        project_id: state.projectId || '',
+        active_node_id: activeNodeId,
+      });
+    } catch (error) {
+      console.warn('Failed to prepare working memory session before opening viewer', error);
+    }
+    if (activeNodeId) {
+      openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeNodeId });
+    } else {
+      openWorkingMemoryViewer();
+    }
   });
   ui.graphCanvas?.addEventListener('pointermove', handlePointerMove);
   ui.graphCanvas?.addEventListener('pointerup', handlePointerUp);

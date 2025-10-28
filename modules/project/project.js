@@ -145,8 +145,9 @@ function syncWorkingMemoryNode(node, projectId) {
   const context = buildNodeContextFromInstance(node);
   if (context) {
     setWorkingMemoryNodeContext(context);
-    setWorkingMemorySession({ project_id: projectId || '', active_node_id: context.id });
+    return context.id;
   }
+  return '';
 }
 
 const state = {
@@ -350,7 +351,10 @@ function handleLastInteractedNodeEvent(event) {
   const nodeId = detail.nodeId ? String(detail.nodeId) : '';
   if (!nodeId) {
     setWorkingMemoryNodeContext({});
-    setWorkingMemorySession({ active_node_id: '' });
+    const result = setWorkingMemorySession({ active_node_id: '' });
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => console.warn('Failed to clear working memory active node', error));
+    }
     return;
   }
   const node = NodeBase.getLastInteractedNode?.();
@@ -360,7 +364,16 @@ function handleLastInteractedNodeEvent(event) {
   if (state.projectId && node.projectId && node.projectId !== state.projectId) {
     return;
   }
-  syncWorkingMemoryNode(node, state.projectId);
+  const activeId = syncWorkingMemoryNode(node, state.projectId);
+  if (activeId) {
+    const result = setWorkingMemorySession({
+      project_id: state.projectId || '',
+      active_node_id: activeId,
+    });
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => console.warn('Failed to sync working memory active node', error));
+    }
+  }
 }
 
 function attachNodeInteractionTracker() {
@@ -383,7 +396,12 @@ const init = async (projectId) => {
   state.projectId = projectId || null;
   initialiseWorkingMemory({ projectId: state.projectId });
   ensureProjectStructureIncluded();
-  setWorkingMemorySession({ project_id: state.projectId || '' });
+  {
+    const result = setWorkingMemorySession({ project_id: state.projectId || '' });
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => console.warn('Failed to initialise working memory session project scope', error));
+    }
+  }
   state.statusDot = document.querySelector('[data-status-dot]');
   state.statusLabel = document.querySelector('[data-status-label]');
   state.currentStatus = 'idle';
@@ -436,11 +454,18 @@ const init = async (projectId) => {
       } catch (error) {
         console.warn('Failed to refresh project structure for working memory view', error);
       }
+      let activeId = '';
       if (lastNode && (!state.projectId || lastNode.projectId === state.projectId)) {
-        syncWorkingMemoryNode(lastNode, state.projectId);
+        activeId = syncWorkingMemoryNode(lastNode, state.projectId) || '';
       }
-      const activeId = lastNode?.id ? String(lastNode.id) : '';
-      setWorkingMemorySession({ project_id: state.projectId || '', active_node_id: activeId });
+      try {
+        await setWorkingMemorySession({
+          project_id: state.projectId || '',
+          active_node_id: activeId,
+        });
+      } catch (error) {
+        console.warn('Failed to prepare working memory session before opening viewer', error);
+      }
       if (activeId) {
         openWorkingMemoryViewer({ nodeOnly: true, nodeId: activeId });
       } else {

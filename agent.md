@@ -80,3 +80,16 @@ record, and notifies subscribers so the viewer and MCP responses stay in sync.
 
 All builders call `initialiseWorkingMemory` when a project loads so the session
 is hydrated from MySQL and ready for incremental updates.
+
+## Server-driven hydration
+
+- `GET /api/working-memory/context` accepts `session_id`, optional
+  `node_id`/`project_id`, and returns a sanitised bundle containing the latest
+  messages, message metadata, working history, and `last_user_message`.
+- `setWorkingMemorySession(partial)` now triggers an on-demand fetch from that
+  endpoint whenever the active session or node changes. The store merges the
+  server payload into the local snapshot and deduplicates no-op updates.
+- Builders should avoid pre-seeding placeholder transcripts or histories when
+  switching nodes. Instead, rely on `setWorkingMemorySession` to hydrate the
+  viewer and await it before opening the modal when the freshly loaded context
+  is required immediately.
