@@ -861,39 +861,45 @@ router.get('/messages', async (req, res, next) => {
   }
   const cappedLimit = parseLimitParam(limitNormalised, 100, 500);
 
-  const buildFilter = ({ includeSession = true, includeNode = true } = {}) => {
-    const clauses = [];
-    const params = [];
-    if (includeSession && sessionId !== null) {
-      clauses.push('session_id = ?');
-      params.push(sessionId);
-    }
-    if (includeNode && nodeId) {
-      clauses.push('node_id = ?');
-      params.push(nodeId);
-    }
-    return { clauses, params };
-  };
+  const baseFilters = [];
+  const baseParams = [];
+  if (sessionId !== null) {
+    baseFilters.push('session_id = ?');
+    baseParams.push(sessionId);
+  }
+  if (nodeId) {
+    baseFilters.push('node_id = ?');
+    baseParams.push(nodeId);
+  }
 
-  const { clauses: baseClauses, params: baseParams } = buildFilter();
-  const queryClauses = [...baseClauses];
+  const queryFilters = [...baseFilters];
   const queryParams = [...baseParams];
   if (cursor !== null) {
-    queryClauses.push('id > ?');
+    queryFilters.push('id > ?');
     queryParams.push(cursor);
   }
 
-  const whereSql = queryClauses.length ? `WHERE ${queryClauses.join(' AND ')}` : '';
+  const whereClause = queryFilters.length ? `WHERE ${queryFilters.join(' AND ')}` : '';
   const sql =
     `SELECT id, session_id, node_id, role, content, message_type, created_at
-     FROM messages ${whereSql}
+     FROM messages ${whereClause}
      ORDER BY id ASC
      LIMIT ?`;
   queryParams.push(cappedLimit + 1);
 
+  const logQueryExecution = (label, sqlText, paramsArray) => {
+    const placeholderCount = (sqlText.match(/\?/g) || []).length;
+    console.log('[GET /api/messages]', label, {
+      sql: sqlText,
+      params: paramsArray,
+      paramsLength: paramsArray.length,
+      placeholderCount,
+    });
+  };
+
   const connection = await pool.getConnection();
   try {
-    console.log('Executing query', sql, queryParams);
+    logQueryExecution('primary query', sql, queryParams);
     const [rows] = await executeWithLogging(connection, sql, queryParams);
     const hasMore = rows.length > cappedLimit;
     const messages = hasMore ? rows.slice(0, cappedLimit) : rows;
@@ -904,30 +910,26 @@ router.get('/messages', async (req, res, next) => {
         ? String(cursor)
         : null;
 
-    const { clauses: sessionOnlyClauses, params: sessionOnlyParams } = buildFilter({
-      includeSession: true,
-      includeNode: false,
-    });
-    const totalClauses = sessionOnlyClauses.length ? sessionOnlyClauses : baseClauses;
-    const totalParams = sessionOnlyClauses.length ? [...sessionOnlyParams] : [...baseParams];
-    const totalWhereSql = totalClauses.length ? `WHERE ${totalClauses.join(' AND ')}` : '';
-    const totalSql = `SELECT COUNT(*) AS total_count FROM messages ${totalWhereSql}`;
-    console.log('Executing query', totalSql, totalParams);
+    const totalFilters = sessionId !== null ? ['session_id = ?'] : [...baseFilters];
+    const totalParams = sessionId !== null ? [sessionId] : [...baseParams];
+    const totalWhereClause = totalFilters.length ? `WHERE ${totalFilters.join(' AND ')}` : '';
+    const totalSql = `SELECT COUNT(*) AS total_count FROM messages ${totalWhereClause}`;
+    logQueryExecution('total count query', totalSql, totalParams);
     const [totalRows] = await executeWithLogging(connection, totalSql, totalParams);
     const totalCount = Number(totalRows?.[0]?.total_count ?? 0);
 
-    const filteredWhereSql = baseClauses.length ? `WHERE ${baseClauses.join(' AND ')}` : '';
-    const filteredSql = `SELECT COUNT(*) AS filtered_count FROM messages ${filteredWhereSql}`;
+    const filteredWhereClause = baseFilters.length ? `WHERE ${baseFilters.join(' AND ')}` : '';
+    const filteredSql = `SELECT COUNT(*) AS filtered_count FROM messages ${filteredWhereClause}`;
     const filteredParams = [...baseParams];
-    console.log('Executing query', filteredSql, filteredParams);
+    logQueryExecution('filtered count query', filteredSql, filteredParams);
     const [filteredRows] = await executeWithLogging(connection, filteredSql, filteredParams);
     const filteredCount = Number(filteredRows?.[0]?.filtered_count ?? 0);
 
-    const lastUserClauses = [...baseClauses, "role = 'user'"];
-    const lastUserWhereSql = lastUserClauses.length ? `WHERE ${lastUserClauses.join(' AND ')}` : '';
-    const lastUserSql = `SELECT content FROM messages ${lastUserWhereSql} ORDER BY id DESC LIMIT 1`;
-    const lastUserParams = [...baseParams];
-    console.log('Executing query', lastUserSql, lastUserParams);
+    const lastUserFilters = [...baseFilters, 'role = ?'];
+    const lastUserWhereClause = lastUserFilters.length ? `WHERE ${lastUserFilters.join(' AND ')}` : '';
+    const lastUserSql = `SELECT content FROM messages ${lastUserWhereClause} ORDER BY id DESC LIMIT 1`;
+    const lastUserParams = [...baseParams, 'user'];
+    logQueryExecution('last user query', lastUserSql, lastUserParams);
     const [lastUserRows] = await executeWithLogging(connection, lastUserSql, lastUserParams);
     const lastUserMessage = lastUserRows && lastUserRows.length ? lastUserRows[0].content || '' : '';
 
