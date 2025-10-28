@@ -313,3 +313,10 @@
   - Ensured total, filtered, and last-user lookups reuse the same clause builder to eliminate mismatched bindings when `session_id` is absent.
   - Retained existing logging for visibility while keeping pagination and metadata behaviour unchanged.
 - Verification: Not run *(database services unavailable in this environment).* 
+## 2025-11-29 10:00 UTC
+- Files modified: `src/routes/api.js`, `agent_history`.
+- Completed tasks:
+  - Rebuilt `/api/messages` query assembly around shared filter/parameter arrays so every SQL placeholder is accompanied by a bound value regardless of node/session combinations.
+  - Added defensive logging that records SQL text, parameter arrays, and placeholder counts for the primary, count, and last-user lookups to catch mismatches early.
+  - Updated the Agent History with the latest backend adjustments for future reference.
+- Verification: Not run *(database services unavailable in this environment).*
