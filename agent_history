@@ -341,3 +341,10 @@
   - Hardened session updates with defensive error handling when synchronising project scopes or clearing node selections.
   - Documented the `/api/working-memory/context` endpoint and the new hydration contract so future changes preserve server-sourced data.
 - Verification: Not run *(browser builders require manual interaction outside this environment).* 
+## 2025-11-30
+- Files modified: `modules/common/messagesStore.js`, `modules/common/workingMemory.js`, `modules/main/main.js`, `src/utils/workingMemorySchema.js`.
+- Completed tasks:
+  - Sorted fetched message batches chronologically by `created_at`/`id` to guarantee stable ordering before notifying listeners.
+  - Updated working-memory and schema helpers to reuse the same chronological comparator and to derive the last user message assuming ascending history.
+  - Adjusted the main builder’s fallback last-user lookup to iterate forwards so it stays aligned with the new ordering model.
+- Verification: Not run *(manual Main builder checks require the full application stack, unavailable in this environment).* 

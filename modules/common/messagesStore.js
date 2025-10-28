@@ -20,6 +20,59 @@ function cloneMessages(list) {
   return normaliseMessages(list);
 }
 
+function toTimestamp(value) {
+  if (!value) {
+    return 0;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function toSortableId(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return { number: value, string: String(value) };
+  }
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) {
+      return { number: asNumber, string: String(value) };
+    }
+    return { number: null, string: String(value) };
+  }
+  if (value === null || value === undefined) {
+    return { number: null, string: '' };
+  }
+  const asString = String(value);
+  const parsed = Number.parseInt(asString, 10);
+  if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
+    return { number: parsed, string: asString };
+  }
+  return { number: null, string: asString };
+}
+
+function compareMessagesChronologically(a, b) {
+  const aTime = toTimestamp(a?.created_at);
+  const bTime = toTimestamp(b?.created_at);
+  if (aTime !== bTime) {
+    return aTime - bTime;
+  }
+  const aId = toSortableId(a?.id);
+  const bId = toSortableId(b?.id);
+  if (aId.number !== null && bId.number !== null && aId.number !== bId.number) {
+    return aId.number - bId.number;
+  }
+  if (aId.string !== bId.string) {
+    return aId.string.localeCompare(bId.string);
+  }
+  return 0;
+}
+
+function buildChronologicalMessages(list) {
+  const normalised = normaliseMessages(list);
+  normalised.sort(compareMessagesChronologically);
+  return normalised;
+}
+
 function notify() {
   const snapshot = getMessagesState();
   listeners.forEach((listener) => {
@@ -172,9 +225,8 @@ export async function fetchMessagesPage({ reset = false, limit } = {}) {
   try {
     const data = await fetchMessagesApi(buildFetchOptions({ reset: effectiveReset, limit }));
     const incomingMessages = normaliseMessages(data?.messages);
-    state.messages = effectiveReset
-      ? incomingMessages
-      : normaliseMessages(state.messages.concat(incomingMessages));
+    const combined = effectiveReset ? incomingMessages : state.messages.concat(incomingMessages);
+    state.messages = buildChronologicalMessages(combined);
     const fallbackCursor = state.messages.length ? state.messages[state.messages.length - 1]?.id : null;
     state.cursor = normaliseCursor(data?.next_cursor ?? fallbackCursor);
     state.hasMore = Boolean(data?.has_more);
