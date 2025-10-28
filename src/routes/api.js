@@ -804,147 +804,86 @@ router.post('/messages', async (req, res, next) => {
 });
 
 router.get('/messages', async (req, res, next) => {
-  const sessionIdRaw = req.query?.session_id;
-  const sessionIdText =
-    typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : `${sessionIdRaw ?? ''}`.trim();
-  const sessionIdValue = sessionIdText ? Number.parseInt(sessionIdText, 10) : null;
-  const sessionId = Number.isFinite(sessionIdValue) && sessionIdValue > 0 ? sessionIdValue : null;
-  if (sessionIdText && sessionId === null) {
-    res.status(400).json({ error: 'session_id must be a positive integer when provided' });
-    return;
-  }
-
-  const nodeIdRaw = req.query?.node_id;
-  const nodeIdText =
-    typeof nodeIdRaw === 'string'
-      ? nodeIdRaw.trim()
-      : nodeIdRaw === undefined || nodeIdRaw === null
-      ? ''
-      : `${nodeIdRaw}`.trim();
-  const nodeId = nodeIdText || null;
-
-  if (!nodeId && sessionId === null) {
-    res.status(400).json({ error: 'Either node_id or session_id is required' });
-    return;
-  }
-
-  const cursorRaw = req.query?.cursor;
-  const cursorText =
-    typeof cursorRaw === 'string'
-      ? cursorRaw.trim()
-      : cursorRaw === undefined || cursorRaw === null
-      ? ''
-      : `${cursorRaw}`.trim();
-  const cursorValue = cursorText ? Number.parseInt(cursorText, 10) : null;
-  const cursor = Number.isFinite(cursorValue) && cursorValue >= 0 ? cursorValue : null;
-  if (cursorText && cursor === null) {
-    console.warn('GET /api/messages received invalid cursor. Defaulting to null.', {
-      sessionId,
-      providedCursor: cursorRaw,
-    });
-  }
-
-  const limitRaw = req.query?.limit;
-  const limitText =
-    typeof limitRaw === 'string'
-      ? limitRaw.trim()
-      : limitRaw === undefined || limitRaw === null
-      ? ''
-      : `${limitRaw}`.trim();
-  const limitParsed = limitText ? Number.parseInt(limitText, 10) : NaN;
-  const limitNormalised = Number.isFinite(limitParsed) && limitParsed > 0 ? limitParsed : 100;
-  if (limitText && (!Number.isFinite(limitParsed) || limitParsed <= 0)) {
-    console.warn('GET /api/messages received invalid limit. Defaulting to 100.', {
-      sessionId,
-      providedLimit: limitRaw,
-    });
-  }
-  const cappedLimit = parseLimitParam(limitNormalised, 100, 500);
-
-  const baseFilters = [];
-  const baseParams = [];
-  if (sessionId !== null) {
-    baseFilters.push('session_id = ?');
-    baseParams.push(sessionId);
-  }
-  if (nodeId) {
-    baseFilters.push('node_id = ?');
-    baseParams.push(nodeId);
-  }
-
-  const queryFilters = [...baseFilters];
-  const queryParams = [...baseParams];
-  if (cursor !== null) {
-    queryFilters.push('id > ?');
-    queryParams.push(cursor);
-  }
-
-  const whereClause = queryFilters.length ? `WHERE ${queryFilters.join(' AND ')}` : '';
-  const sql =
-    `SELECT id, session_id, node_id, role, content, message_type, created_at
-     FROM messages ${whereClause}
-     ORDER BY id ASC
-     LIMIT ?`;
-  queryParams.push(cappedLimit + 1);
-
-  const logQueryExecution = (label, sqlText, paramsArray) => {
-    const placeholderCount = (sqlText.match(/\?/g) || []).length;
-    console.log('[GET /api/messages]', label, {
-      sql: sqlText,
-      params: paramsArray,
-      paramsLength: paramsArray.length,
-      placeholderCount,
-    });
-  };
-
-  const connection = await pool.getConnection();
   try {
-    logQueryExecution('primary query', sql, queryParams);
-    const [rows] = await executeWithLogging(connection, sql, queryParams);
-    const hasMore = rows.length > cappedLimit;
-    const messages = hasMore ? rows.slice(0, cappedLimit) : rows;
-    const nextCursor =
-      messages.length > 0
-        ? String(messages[messages.length - 1].id)
-        : cursor !== null
-        ? String(cursor)
-        : null;
+    const sessionId = req.query?.session_id ? String(req.query.session_id).trim() : null;
+    const nodeId = req.query?.node_id ? String(req.query.node_id).trim() : null;
 
-    const totalFilters = sessionId !== null ? ['session_id = ?'] : [...baseFilters];
-    const totalParams = sessionId !== null ? [sessionId] : [...baseParams];
-    const totalWhereClause = totalFilters.length ? `WHERE ${totalFilters.join(' AND ')}` : '';
-    const totalSql = `SELECT COUNT(*) AS total_count FROM messages ${totalWhereClause}`;
-    logQueryExecution('total count query', totalSql, totalParams);
-    const [totalRows] = await executeWithLogging(connection, totalSql, totalParams);
-    const totalCount = Number(totalRows?.[0]?.total_count ?? 0);
+    if (!sessionId && !nodeId) {
+      res.status(400).json({ error: 'Either node_id or session_id is required' });
+      return;
+    }
 
-    const filteredWhereClause = baseFilters.length ? `WHERE ${baseFilters.join(' AND ')}` : '';
-    const filteredSql = `SELECT COUNT(*) AS filtered_count FROM messages ${filteredWhereClause}`;
-    const filteredParams = [...baseParams];
-    logQueryExecution('filtered count query', filteredSql, filteredParams);
-    const [filteredRows] = await executeWithLogging(connection, filteredSql, filteredParams);
-    const filteredCount = Number(filteredRows?.[0]?.filtered_count ?? 0);
+    const limit = parseLimitParam(req.query?.limit, 100, 500);
+    const cursor = req.query?.cursor ? Number(req.query.cursor) : null;
 
-    const lastUserFilters = [...baseFilters, 'role = ?'];
-    const lastUserWhereClause = lastUserFilters.length ? `WHERE ${lastUserFilters.join(' AND ')}` : '';
-    const lastUserSql = `SELECT content FROM messages ${lastUserWhereClause} ORDER BY id DESC LIMIT 1`;
-    const lastUserParams = [...baseParams, 'user'];
-    logQueryExecution('last user query', lastUserSql, lastUserParams);
-    const [lastUserRows] = await executeWithLogging(connection, lastUserSql, lastUserParams);
-    const lastUserMessage = lastUserRows && lastUserRows.length ? lastUserRows[0].content || '' : '';
+    // ---- Build WHERE and PARAMS safely ----
+    const filters = [];
+    const params = [];
+
+    if (sessionId) {
+      filters.push('session_id = ?');
+      params.push(sessionId);
+    }
+    if (nodeId) {
+      filters.push('node_id = ?');
+      params.push(nodeId);
+    }
+    if (cursor) {
+      filters.push('id > ?');
+      params.push(cursor);
+    }
+
+    let sql = `
+      SELECT id, session_id, node_id, role, content, message_type, created_at
+      FROM messages
+    `;
+    if (filters.length) sql += ` WHERE ${filters.join(' AND ')}`;
+    sql += ` ORDER BY id ASC LIMIT ${Number(limit + 1)}`;
+
+
+    // Debug placeholder/param count
+    console.log('[GET /api/messages]', { sql, params, placeholders: (sql.match(/\?/g) || []).length });
+
+    const connection = await pool.getConnection();
+
+    const [rows] = await executeWithLogging(connection, sql, params);
+    const hasMore = rows.length > limit;
+    const messages = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = messages.length ? String(messages[messages.length - 1].id) : null;
+
+    // Count total and filtered results
+    const countFilters = [];
+    const countParams = [];
+    if (sessionId) {
+      countFilters.push('session_id = ?');
+      countParams.push(sessionId);
+    }
+    if (nodeId) {
+      countFilters.push('node_id = ?');
+      countParams.push(nodeId);
+    }
+    const whereCount = countFilters.length ? `WHERE ${countFilters.join(' AND ')}` : '';
+    const [totalRows] = await executeWithLogging(connection, `SELECT COUNT(*) AS total_count FROM messages ${whereCount}`, countParams);
+    const totalCount = Number(totalRows?.[0]?.total_count || 0);
+
+    // Last user message
+    const lastFilters = [...countFilters, 'role = ?'];
+    const lastParams = [...countParams, 'user'];
+    const whereLast = lastFilters.length ? `WHERE ${lastFilters.join(' AND ')}` : '';
+    const [lastRows] = await executeWithLogging(connection, `SELECT content FROM messages ${whereLast} ORDER BY id DESC LIMIT 1`, lastParams);
+    const lastUserMessage = lastRows?.[0]?.content || '';
+
+    connection.release();
 
     res.json({
       messages,
       total_count: totalCount,
-      filtered_count: filteredCount,
       has_more: hasMore,
       next_cursor: nextCursor,
-      last_user_message: lastUserMessage || '',
+      last_user_message: lastUserMessage,
     });
   } catch (error) {
     next(error);
-  } finally {
-    connection.release();
   }
 });
 
