@@ -14,12 +14,26 @@ const {
 } = require('../utils/neo4jHelpers');
 const { upsertNodeVersion, deleteNodeVersion } = require('../utils/nodeVersions');
 const { executeWithLogging, queryWithLogging } = require('../utils/mysqlLogger');
+const {
+  fetchMessagesPage,
+  countMessagesForScope,
+  fetchLastUserMessageForScope,
+  fetchMessagesForHistory,
+  fetchWorkingHistoryForNode,
+  fetchLatestSummaryText,
+  fetchSessionById,
+} = require('../utils/mysqlQueries');
 const { ValidationError, validateMessagePayload } = require('../utils/validators');
 const {
   loadWorkingMemory,
   saveWorkingMemoryPart,
   WORKING_MEMORY_PARTS,
 } = require('../utils/workingMemoryStore');
+const {
+  DEFAULT_CONFIG,
+  MAX_HISTORY_LENGTH,
+  sanitiseWorkingMemoryContext,
+} = require('../utils/workingMemorySchema');
 const { buildStructureFromGraph } = require('../utils/projectStructure');
 const router = express.Router();
 
@@ -815,75 +829,116 @@ router.get('/messages', async (req, res, next) => {
 
     const limit = parseLimitParam(req.query?.limit, 100, 500);
     const cursor = req.query?.cursor ? Number(req.query.cursor) : null;
-
-    // ---- Build WHERE and PARAMS safely ----
-    const filters = [];
-    const params = [];
-
-    if (sessionId) {
-      filters.push('session_id = ?');
-      params.push(sessionId);
-    }
-    if (nodeId) {
-      filters.push('node_id = ?');
-      params.push(nodeId);
-    }
-    if (cursor) {
-      filters.push('id > ?');
-      params.push(cursor);
-    }
-
-    let sql = `
-      SELECT id, session_id, node_id, role, content, message_type, created_at
-      FROM messages
-    `;
-    if (filters.length) sql += ` WHERE ${filters.join(' AND ')}`;
-    sql += ` ORDER BY id ASC LIMIT ${Number(limit + 1)}`;
-
-
-    // Debug placeholder/param count
-    console.log('[GET /api/messages]', { sql, params, placeholders: (sql.match(/\?/g) || []).length });
-
     const connection = await pool.getConnection();
+    try {
+      const page = await fetchMessagesPage(connection, {
+        sessionId,
+        nodeId,
+        limit,
+        cursor,
+        direction: 'ASC',
+        includeExtraRow: true,
+      });
+      console.log('[GET /api/messages]', {
+        sql: page.sql,
+        params: page.params,
+        placeholders: (page.sql.match(/\?/g) || []).length,
+      });
 
-    const [rows] = await executeWithLogging(connection, sql, params);
-    const hasMore = rows.length > limit;
-    const messages = hasMore ? rows.slice(0, limit) : rows;
-    const nextCursor = messages.length ? String(messages[messages.length - 1].id) : null;
+      const messages = page.messages;
+      const hasMore = page.hasMore;
+      const nextCursor = messages.length ? String(messages[messages.length - 1].id) : null;
+      const totalCount = await countMessagesForScope(connection, { sessionId, nodeId });
+      const lastUserMessage = await fetchLastUserMessageForScope(connection, { sessionId, nodeId });
 
-    // Count total and filtered results
-    const countFilters = [];
-    const countParams = [];
-    if (sessionId) {
-      countFilters.push('session_id = ?');
-      countParams.push(sessionId);
+      res.json({
+        messages,
+        total_count: totalCount,
+        has_more: hasMore,
+        next_cursor: nextCursor,
+        last_user_message: lastUserMessage,
+      });
+    } finally {
+      connection.release();
     }
-    if (nodeId) {
-      countFilters.push('node_id = ?');
-      countParams.push(nodeId);
-    }
-    const whereCount = countFilters.length ? `WHERE ${countFilters.join(' AND ')}` : '';
-    const [totalRows] = await executeWithLogging(connection, `SELECT COUNT(*) AS total_count FROM messages ${whereCount}`, countParams);
-    const totalCount = Number(totalRows?.[0]?.total_count || 0);
-
-    // Last user message
-    const lastFilters = [...countFilters, 'role = ?'];
-    const lastParams = [...countParams, 'user'];
-    const whereLast = lastFilters.length ? `WHERE ${lastFilters.join(' AND ')}` : '';
-    const [lastRows] = await executeWithLogging(connection, `SELECT content FROM messages ${whereLast} ORDER BY id DESC LIMIT 1`, lastParams);
-    const lastUserMessage = lastRows?.[0]?.content || '';
-
-    connection.release();
-
-    res.json({
-      messages,
-      total_count: totalCount,
-      has_more: hasMore,
-      next_cursor: nextCursor,
-      last_user_message: lastUserMessage,
-    });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get('/working-memory/context', async (req, res, next) => {
+  const sessionIdRaw = req.query?.session_id;
+  const nodeIdRaw = req.query?.node_id;
+  const projectIdRaw = req.query?.project_id;
+  const historyLengthRaw = req.query?.history_length;
+
+  const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
+  if (!sessionId) {
+    res.status(400).json({ error: 'session_id is required' });
+    return;
+  }
+
+  const nodeId = typeof nodeIdRaw === 'string' ? nodeIdRaw.trim() : '';
+  const providedProjectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  const parsedHistory = Number.parseInt(historyLengthRaw ?? DEFAULT_CONFIG.history_length, 10);
+  const historyLength = Math.min(
+    Math.max(Number.isNaN(parsedHistory) ? DEFAULT_CONFIG.history_length : parsedHistory, 1),
+    MAX_HISTORY_LENGTH
+  );
+
+  const connection = await pool.getConnection();
+  try {
+    const sessionRecord = await fetchSessionById(connection, sessionId);
+    let projectId = providedProjectId || sessionRecord?.project_id || '';
+    if (!projectId) {
+      projectId = config.defaults.projectId;
+    }
+
+    const activeNodeId = sessionRecord?.active_node ? String(sessionRecord.active_node).trim() : '';
+    const workingNodeId = nodeId || activeNodeId;
+
+    const messages = await fetchMessagesForHistory(connection, {
+      sessionId,
+      nodeId,
+      limit: historyLength,
+    });
+    const totalCount = await countMessagesForScope(connection, { sessionId, nodeId });
+    const lastUserMessage = await fetchLastUserMessageForScope(connection, { sessionId, nodeId });
+
+    let workingHistoryRecord = null;
+    if (projectId && workingNodeId) {
+      workingHistoryRecord = await fetchWorkingHistoryForNode(connection, {
+        projectId,
+        nodeId: workingNodeId,
+      });
+    }
+    let workingHistoryText = workingHistoryRecord?.working_history || '';
+    if (!workingHistoryText) {
+      workingHistoryText = await fetchLatestSummaryText(connection, {
+        sessionId,
+        nodeId: workingNodeId || null,
+      });
+    }
+
+    const sanitised = sanitiseWorkingMemoryContext({
+      messages,
+      messages_meta: {
+        total_count: totalCount,
+        filtered_count: messages.length,
+        has_more: totalCount > messages.length,
+        next_cursor: null,
+        last_user_message: lastUserMessage,
+      },
+      working_history: workingHistoryText,
+      last_user_message: lastUserMessage,
+      historyLength,
+    });
+
+    res.json(sanitised);
+  } catch (error) {
+    next(error);
+  } finally {
+    connection.release();
   }
 });
 

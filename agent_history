@@ -320,3 +320,10 @@
   - Added defensive logging that records SQL text, parameter arrays, and placeholder counts for the primary, count, and last-user lookups to catch mismatches early.
   - Updated the Agent History with the latest backend adjustments for future reference.
 - Verification: Not run *(database services unavailable in this environment).*
+## 2025-11-29 18:30 UTC
+- Files modified: `src/routes/api.js`, `src/utils/mysqlQueries.js`, `src/utils/workingMemorySchema.js`.
+- Completed tasks:
+  - Added a `/api/working-memory/context` endpoint that hydrates node-scoped chat history, last-user details, and working-history fallbacks using capped history lengths.
+  - Refactored `/api/messages` to reuse shared MySQL helpers for paging, counts, and last-user lookups while keeping logging intact.
+  - Introduced reusable MySQL queries plus working-memory sanitisation helpers so responses align with the established schema and guard against unbounded history fetches.
+- Verification: Not run *(database services unavailable in this environment).* 

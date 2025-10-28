@@ -14,6 +14,7 @@ const WORKING_MEMORY_PARTS = new Set([
   'node_context',
   'fetched_context',
   'working_history',
+  'messages',
   'messages_meta',
   'last_user_message',
   'config',
@@ -402,6 +403,56 @@ function sanitiseConfig(config) {
   };
 }
 
+function sanitiseWorkingMemoryContext(payload = {}) {
+  const source = ensureObject(payload);
+  const config = sanitiseConfig({ history_length: source.historyLength || source.history_length });
+  const historyLength = config.history_length;
+
+  const sanitisedMessages = sanitiseMessages(source.messages, { historyLength });
+  const derivedLastUser = deriveLastUserMessage(sanitisedMessages);
+  const providedLastUser = sanitiseLastUserMessage(source.last_user_message, {
+    messages: sanitisedMessages,
+  });
+  const lastUserMessage = providedLastUser || derivedLastUser;
+
+  const metaSource = ensureObject(source.messages_meta);
+  const baseMeta = sanitiseMessagesMeta(
+    {
+      total_count: metaSource.total_count ?? sanitisedMessages.length,
+      filtered_count: metaSource.filtered_count ?? sanitisedMessages.length,
+      has_more: metaSource.has_more,
+      next_cursor: metaSource.next_cursor,
+      last_user_message: metaSource.last_user_message ?? lastUserMessage,
+      last_synced_at: metaSource.last_synced_at,
+    },
+    { lastUserMessageFallback: lastUserMessage || derivedLastUser }
+  );
+
+  const resolvedLastUser = sanitiseLastUserMessage(baseMeta.last_user_message, {
+    messages: sanitisedMessages,
+  });
+
+  const messagesMeta = sanitiseMessagesMeta(
+    {
+      ...baseMeta,
+      filtered_count: sanitisedMessages.length,
+      last_user_message: resolvedLastUser || derivedLastUser,
+    },
+    { lastUserMessageFallback: resolvedLastUser || derivedLastUser }
+  );
+
+  const workingHistorySource =
+    source.working_history !== undefined ? source.working_history : source.workingHistory;
+  const workingHistory = sanitiseWorkingHistory(workingHistorySource);
+
+  return {
+    messages: sanitisedMessages,
+    messages_meta: messagesMeta,
+    working_history: workingHistory,
+    last_user_message: resolvedLastUser || derivedLastUser,
+  };
+}
+
 function sanitiseSession(session) {
   const base = ensureObject(session);
   return {
@@ -447,6 +498,8 @@ function sanitiseWorkingMemoryPart(part, value, options = {}) {
       return sanitiseFetchedContext(value);
     case 'working_history':
       return sanitiseWorkingHistory(value);
+    case 'messages':
+      return sanitiseMessages(value, { historyLength: options.historyLength });
     case 'messages_meta':
       return sanitiseMessagesMeta(value, { lastUserMessageFallback: options.lastUserMessage });
     case 'last_user_message':
@@ -617,4 +670,5 @@ module.exports = {
   normaliseWorkingMemory,
   deriveLastUserMessage,
   sanitiseMessagesMeta,
+  sanitiseWorkingMemoryContext,
 };
