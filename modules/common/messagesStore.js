@@ -129,7 +129,7 @@ export function setMessagesContext({ sessionId, nodeId } = {}) {
   state.totalCount = 0;
   state.filteredCount = 0;
   state.lastUserMessage = '';
-  state.status = nextSessionId ? 'idle' : 'empty';
+  state.status = nextSessionId || nextNodeId ? 'idle' : 'empty';
   notify();
   return true;
 }
@@ -141,7 +141,7 @@ export function resetMessagesStore() {
   state.totalCount = 0;
   state.filteredCount = 0;
   state.lastUserMessage = '';
-  state.status = state.sessionId ? 'idle' : 'empty';
+  state.status = state.sessionId || state.nodeId ? 'idle' : 'empty';
   notify();
 }
 
@@ -149,6 +149,8 @@ function buildFetchOptions({ reset, limit } = {}) {
   const options = { limit: limit || DEFAULT_PAGE_SIZE };
   if (state.nodeId) {
     options.nodeId = state.nodeId;
+  } else if (state.sessionId) {
+    options.sessionId = state.sessionId;
   }
   if (!reset) {
     const cursor = normaliseCursor(state.cursor);
@@ -160,7 +162,7 @@ function buildFetchOptions({ reset, limit } = {}) {
 }
 
 export async function fetchMessagesPage({ reset = false, limit } = {}) {
-  if (!state.sessionId) {
+  if (!state.sessionId && !state.nodeId) {
     resetMessagesStore();
     return { messages: [] };
   }
@@ -168,7 +170,7 @@ export async function fetchMessagesPage({ reset = false, limit } = {}) {
   state.status = state.messages.length ? 'updating' : 'loading';
   notify();
   try {
-    const data = await fetchMessagesApi(state.sessionId, buildFetchOptions({ reset: effectiveReset, limit }));
+    const data = await fetchMessagesApi(buildFetchOptions({ reset: effectiveReset, limit }));
     const incomingMessages = normaliseMessages(data?.messages);
     state.messages = effectiveReset
       ? incomingMessages

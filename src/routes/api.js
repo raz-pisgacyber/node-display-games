@@ -773,17 +773,17 @@ router.post('/messages', async (req, res, next) => {
   const createdAt = new Date();
   const connection = await pool.getConnection();
   try {
-    const [result] = await executeWithLogging(
-      connection,
-      'INSERT INTO messages (session_id, node_id, role, message_type, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [sessionId, nodeId, role, messageType, trimmedContent, createdAt]
-    );
+    const insertSql =
+      'INSERT INTO messages (session_id, node_id, role, message_type, content, created_at) VALUES (?, ?, ?, ?, ?, ?)';
+    const insertParams = [sessionId, nodeId, role, messageType, trimmedContent, createdAt];
+    console.log('Executing query', insertSql, insertParams);
+    const [result] = await executeWithLogging(connection, insertSql, insertParams);
     const insertedId = result.insertId;
-    const [rows] = await executeWithLogging(
-      connection,
-      'SELECT id, session_id, node_id, role, content, message_type, created_at FROM messages WHERE id = ?',
-      [insertedId]
-    );
+    const selectSql =
+      'SELECT id, session_id, node_id, role, content, message_type, created_at FROM messages WHERE id = ?';
+    const selectParams = [insertedId];
+    console.log('Executing query', selectSql, selectParams);
+    const [rows] = await executeWithLogging(connection, selectSql, selectParams);
     const saved = rows && rows.length ? rows[0] : null;
     res.status(201).json(
       saved || {
@@ -807,9 +807,10 @@ router.get('/messages', async (req, res, next) => {
   const sessionIdRaw = req.query?.session_id;
   const sessionIdText =
     typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : `${sessionIdRaw ?? ''}`.trim();
-  const sessionId = Number.parseInt(sessionIdText, 10);
-  if (!Number.isFinite(sessionId) || sessionId <= 0) {
-    res.status(400).json({ error: 'session_id is required' });
+  const sessionIdValue = sessionIdText ? Number.parseInt(sessionIdText, 10) : null;
+  const sessionId = Number.isFinite(sessionIdValue) && sessionIdValue > 0 ? sessionIdValue : null;
+  if (sessionIdText && sessionId === null) {
+    res.status(400).json({ error: 'session_id must be a positive integer when provided' });
     return;
   }
 
@@ -821,6 +822,11 @@ router.get('/messages', async (req, res, next) => {
       ? ''
       : `${nodeIdRaw}`.trim();
   const nodeId = nodeIdText || null;
+
+  if (!nodeId && sessionId === null) {
+    res.status(400).json({ error: 'Either node_id or session_id is required' });
+    return;
+  }
 
   const cursorRaw = req.query?.cursor;
   const cursorText =
@@ -855,28 +861,41 @@ router.get('/messages', async (req, res, next) => {
   }
   const cappedLimit = parseLimitParam(limitNormalised, 100, 500);
 
-  const whereClauses = ['session_id = ?'];
-  const params = [sessionId];
+  const sessionClauses = [];
+  const sessionParams = [];
+  if (sessionId !== null) {
+    sessionClauses.push('session_id = ?');
+    sessionParams.push(sessionId);
+  }
 
+  const nodeClauses = [];
+  const nodeParams = [];
   if (nodeId) {
-    whereClauses.push('(node_id = ? OR node_id IS NULL)');
-    params.push(nodeId);
+    nodeClauses.push('node_id = ?');
+    nodeParams.push(nodeId);
   }
 
+  const baseClauses = [...sessionClauses, ...nodeClauses];
+  const baseParams = [...sessionParams, ...nodeParams];
+
+  const queryClauses = [...baseClauses];
+  const queryParams = [...baseParams];
   if (cursor !== null) {
-    whereClauses.push('id > ?');
-    params.push(cursor);
+    queryClauses.push('id > ?');
+    queryParams.push(cursor);
   }
 
+  const whereSql = queryClauses.length ? `WHERE ${queryClauses.join(' AND ')}` : '';
   const sql =
     `SELECT id, session_id, node_id, role, content, message_type, created_at
-     FROM messages WHERE ${whereClauses.join(' AND ')}
+     FROM messages ${whereSql}
      ORDER BY id ASC
      LIMIT ?`;
-  const queryParams = [...params, cappedLimit + 1];
+  queryParams.push(cappedLimit + 1);
 
   const connection = await pool.getConnection();
   try {
+    console.log('Executing query', sql, queryParams);
     const [rows] = await executeWithLogging(connection, sql, queryParams);
     const hasMore = rows.length > cappedLimit;
     const messages = hasMore ? rows.slice(0, cappedLimit) : rows;
@@ -887,28 +906,27 @@ router.get('/messages', async (req, res, next) => {
         ? String(cursor)
         : null;
 
-    const [totalRows] = await executeWithLogging(
-      connection,
-      'SELECT COUNT(*) AS total_count FROM messages WHERE session_id = ?',
-      [sessionId]
-    );
+    const totalClauses = sessionClauses.length ? sessionClauses : baseClauses;
+    const totalParams = sessionClauses.length ? [...sessionParams] : [...baseParams];
+    const totalWhereSql = totalClauses.length ? `WHERE ${totalClauses.join(' AND ')}` : '';
+    const totalSql = `SELECT COUNT(*) AS total_count FROM messages ${totalWhereSql}`;
+    console.log('Executing query', totalSql, totalParams);
+    const [totalRows] = await executeWithLogging(connection, totalSql, totalParams);
     const totalCount = Number(totalRows?.[0]?.total_count ?? 0);
 
-    let filteredCount = totalCount;
-    if (nodeId) {
-      const [filteredRows] = await executeWithLogging(
-        connection,
-        'SELECT COUNT(*) AS filtered_count FROM messages WHERE session_id = ? AND (node_id = ? OR node_id IS NULL)',
-        [sessionId, nodeId]
-      );
-      filteredCount = Number(filteredRows?.[0]?.filtered_count ?? 0);
-    }
+    const filteredWhereSql = baseClauses.length ? `WHERE ${baseClauses.join(' AND ')}` : '';
+    const filteredSql = `SELECT COUNT(*) AS filtered_count FROM messages ${filteredWhereSql}`;
+    const filteredParams = [...baseParams];
+    console.log('Executing query', filteredSql, filteredParams);
+    const [filteredRows] = await executeWithLogging(connection, filteredSql, filteredParams);
+    const filteredCount = Number(filteredRows?.[0]?.filtered_count ?? 0);
 
-    const [lastUserRows] = await executeWithLogging(
-      connection,
-      "SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
-      [sessionId]
-    );
+    const lastUserClauses = [...baseClauses, "role = 'user'"];
+    const lastUserWhereSql = lastUserClauses.length ? `WHERE ${lastUserClauses.join(' AND ')}` : '';
+    const lastUserSql = `SELECT content FROM messages ${lastUserWhereSql} ORDER BY id DESC LIMIT 1`;
+    const lastUserParams = [...baseParams];
+    console.log('Executing query', lastUserSql, lastUserParams);
+    const [lastUserRows] = await executeWithLogging(connection, lastUserSql, lastUserParams);
     const lastUserMessage = lastUserRows && lastUserRows.length ? lastUserRows[0].content || '' : '';
 
     res.json({

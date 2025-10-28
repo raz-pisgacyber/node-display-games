@@ -299,3 +299,10 @@
   - Assembled the SELECT statement via explicit clause tracking so every `?` placeholder has a matching bound value, preventing MySQL argument mismatches.
   - Preserved existing pagination metadata (has_more, next_cursor, counts, last_user_message) while leveraging the sanitised query inputs.
 - Verification: Not run *(database connections unavailable in container environment).*
+## 2025-11-28 15:00 UTC
+- Files modified: `src/routes/api.js`, `modules/common/api.js`, `modules/common/messagesStore.js`, `core/nodebase.js`.
+- Completed tasks:
+  - Taught `/api/messages` to accept either `node_id` or `session_id`, rebuilt the filtering logic around clause collections, and logged every message query alongside its bound parameters before execution.
+  - Normalised the client API wrapper and shared store to prefer node-scoped history fetches while keeping session-aware fallbacks and updated NodeBase to consume the new response shape.
+  - Ensured pagination metadata and last-user lookups respect the active node filter and that logging surfaces mismatched parameter orders during testing.
+- Verification: Not run *(database services unavailable in this environment).* 

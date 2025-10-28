@@ -765,9 +765,14 @@ class NodeBase {
 
     const promise = (async () => {
       try {
-        const session = await ensureSession(this.projectId);
-        const messages = await fetchMessages(session.id, { nodeId: this.id, limit: 120 });
-        const ordered = Array.isArray(messages) ? [...messages].reverse() : [];
+        await ensureSession(this.projectId);
+        const response = await fetchMessages({ nodeId: this.id, limit: 120 });
+        const rawMessages = Array.isArray(response?.messages)
+          ? response.messages
+          : Array.isArray(response)
+          ? response
+          : [];
+        const ordered = [...rawMessages].reverse();
         this.discussionMessages = ordered;
         this.discussionInitialized = true;
         this.discussionError = '';

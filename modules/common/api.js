@@ -138,14 +138,18 @@ export async function deleteLink(payload, { projectId, keepalive } = {}) {
   });
 }
 
-export async function fetchMessages(sessionId, { nodeId, limit, cursor } = {}) {
-  if (!sessionId) {
-    throw new Error('sessionId is required');
+export async function fetchMessages({ sessionId, nodeId, limit, cursor } = {}) {
+  const sessionIdText = sessionId === undefined || sessionId === null ? '' : `${sessionId}`.trim();
+  const nodeIdText = nodeId === undefined || nodeId === null ? '' : `${nodeId}`.trim();
+  if (!sessionIdText && !nodeIdText) {
+    throw new Error('sessionId or nodeId is required');
   }
   const params = new URLSearchParams();
-  params.set('session_id', sessionId);
-  if (nodeId) {
-    params.set('node_id', nodeId);
+  if (nodeIdText) {
+    params.set('node_id', nodeIdText);
+  }
+  if (sessionIdText) {
+    params.set('session_id', sessionIdText);
   }
   if (limit !== undefined && limit !== null) {
     const limitValue = typeof limit === 'number' ? limit : Number.parseInt(`${limit}`, 10);
