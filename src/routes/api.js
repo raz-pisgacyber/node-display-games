@@ -861,23 +861,21 @@ router.get('/messages', async (req, res, next) => {
   }
   const cappedLimit = parseLimitParam(limitNormalised, 100, 500);
 
-  const sessionClauses = [];
-  const sessionParams = [];
-  if (sessionId !== null) {
-    sessionClauses.push('session_id = ?');
-    sessionParams.push(sessionId);
-  }
+  const buildFilter = ({ includeSession = true, includeNode = true } = {}) => {
+    const clauses = [];
+    const params = [];
+    if (includeSession && sessionId !== null) {
+      clauses.push('session_id = ?');
+      params.push(sessionId);
+    }
+    if (includeNode && nodeId) {
+      clauses.push('node_id = ?');
+      params.push(nodeId);
+    }
+    return { clauses, params };
+  };
 
-  const nodeClauses = [];
-  const nodeParams = [];
-  if (nodeId) {
-    nodeClauses.push('node_id = ?');
-    nodeParams.push(nodeId);
-  }
-
-  const baseClauses = [...sessionClauses, ...nodeClauses];
-  const baseParams = [...sessionParams, ...nodeParams];
-
+  const { clauses: baseClauses, params: baseParams } = buildFilter();
   const queryClauses = [...baseClauses];
   const queryParams = [...baseParams];
   if (cursor !== null) {
@@ -906,8 +904,12 @@ router.get('/messages', async (req, res, next) => {
         ? String(cursor)
         : null;
 
-    const totalClauses = sessionClauses.length ? sessionClauses : baseClauses;
-    const totalParams = sessionClauses.length ? [...sessionParams] : [...baseParams];
+    const { clauses: sessionOnlyClauses, params: sessionOnlyParams } = buildFilter({
+      includeSession: true,
+      includeNode: false,
+    });
+    const totalClauses = sessionOnlyClauses.length ? sessionOnlyClauses : baseClauses;
+    const totalParams = sessionOnlyClauses.length ? [...sessionOnlyParams] : [...baseParams];
     const totalWhereSql = totalClauses.length ? `WHERE ${totalClauses.join(' AND ')}` : '';
     const totalSql = `SELECT COUNT(*) AS total_count FROM messages ${totalWhereSql}`;
     console.log('Executing query', totalSql, totalParams);

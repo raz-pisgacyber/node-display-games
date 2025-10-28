@@ -306,3 +306,10 @@
   - Normalised the client API wrapper and shared store to prefer node-scoped history fetches while keeping session-aware fallbacks and updated NodeBase to consume the new response shape.
   - Ensured pagination metadata and last-user lookups respect the active node filter and that logging surfaces mismatched parameter orders during testing.
 - Verification: Not run *(database services unavailable in this environment).* 
+## 2025-11-28 19:30 UTC
+- Files modified: `src/routes/api.js`.
+- Completed tasks:
+  - Consolidated `/api/messages` filter construction through a shared helper so node-only requests produce SQL with matching placeholders and bound parameters.
+  - Ensured total, filtered, and last-user lookups reuse the same clause builder to eliminate mismatched bindings when `session_id` is absent.
+  - Retained existing logging for visibility while keeping pagination and metadata behaviour unchanged.
+- Verification: Not run *(database services unavailable in this environment).* 
