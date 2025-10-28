@@ -1,4 +1,4 @@
-import { fetchJSON } from './api.js';
+import { fetchJSON, fetchWorkingMemoryContext } from './api.js';
 
 const DEFAULT_CONFIG = {
   history_length: 20,
@@ -540,6 +540,72 @@ let memory = buildDefaultMemory();
 let hiddenProjectStructure = null;
 let hiddenProjectStructureFrozen = false;
 let pendingLoad = null;
+let nodeHydrationController = null;
+let nodeHydrationSequence = 0;
+
+function cancelNodeHydration() {
+  if (nodeHydrationController) {
+    nodeHydrationController.abort();
+    nodeHydrationController = null;
+  }
+}
+
+async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
+  if (!sessionId) {
+    return;
+  }
+  cancelNodeHydration();
+  nodeHydrationSequence += 1;
+  const token = nodeHydrationSequence;
+  const controller = new AbortController();
+  nodeHydrationController = controller;
+  const includeWorkingHistory = memory.config.include_working_history !== false;
+  const historyLength = normaliseHistoryLength(memory.config.history_length);
+  try {
+    const payload = await fetchWorkingMemoryContext({
+      sessionId,
+      projectId,
+      nodeId,
+      historyLength,
+      includeWorkingHistory,
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted || token !== nodeHydrationSequence) {
+      return;
+    }
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+    const hasMessages = Array.isArray(payload.messages);
+    const hasMeta = payload.messages_meta && typeof payload.messages_meta === 'object';
+    const hasLastUser = Object.prototype.hasOwnProperty.call(payload, 'last_user_message');
+    if (hasMessages || hasMeta || hasLastUser) {
+      let metadata = hasMeta ? payload.messages_meta : undefined;
+      if (!metadata && hasLastUser) {
+        metadata = {
+          ...(memory.messages_meta ? memory.messages_meta : defaultMessagesMeta()),
+          last_user_message: typeof payload.last_user_message === 'string'
+            ? payload.last_user_message
+            : '',
+        };
+      }
+      const messageList = hasMessages ? payload.messages : memory.messages;
+      setWorkingMemoryMessages(messageList, metadata);
+    }
+    if (includeWorkingHistory && Object.prototype.hasOwnProperty.call(payload, 'working_history')) {
+      setWorkingMemoryWorkingHistory(payload.working_history);
+    }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      return;
+    }
+    console.warn('Failed to hydrate working memory context', error);
+  } finally {
+    if (nodeHydrationController === controller) {
+      nodeHydrationController = null;
+    }
+  }
+}
 
 function resetHiddenProjectStructure() {
   hiddenProjectStructure = null;
@@ -824,7 +890,7 @@ export function resetWorkingMemory() {
   return getWorkingMemorySnapshot();
 }
 
-export function setWorkingMemorySession(partial = {}) {
+export async function setWorkingMemorySession(partial = {}) {
   const next = { ...memory.session };
   const overrides = {};
   if (partial.session_id !== undefined) {
@@ -844,6 +910,9 @@ export function setWorkingMemorySession(partial = {}) {
   if (!sessionChanged && !projectChanged && !nodeChanged) {
     return getWorkingMemorySnapshot();
   }
+  if (sessionChanged || nodeChanged) {
+    cancelNodeHydration();
+  }
   if (sessionChanged || projectChanged) {
     resetHiddenProjectStructure();
   }
@@ -856,6 +925,17 @@ export function setWorkingMemorySession(partial = {}) {
     ensureSessionLoaded(memory.session.session_id, memory.session.project_id, overrides);
   } else if (memory.session.session_id) {
     persistPart('session', { ...memory.session });
+  }
+  if (nodeChanged && memory.session.session_id) {
+    try {
+      await hydrateActiveNodeContext({
+        sessionId: memory.session.session_id,
+        projectId: memory.session.project_id,
+        nodeId: memory.session.active_node_id,
+      });
+    } catch (error) {
+      console.warn('Failed to hydrate working memory after node change', error);
+    }
   }
   return getWorkingMemorySnapshot();
 }
