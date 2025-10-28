@@ -221,13 +221,14 @@ function deriveLastUserMessageFromList(messages) {
   if (!Array.isArray(messages)) {
     return '';
   }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
+  let lastUserMessage = '';
+  for (let index = 0; index < messages.length; index += 1) {
     const entry = messages[index];
     if (entry?.role === 'user' && entry.content) {
-      return entry.content;
+      lastUserMessage = entry.content;
     }
   }
-  return '';
+  return lastUserMessage;
 }
 
 function mapMessagesStatus(storeStatus) {

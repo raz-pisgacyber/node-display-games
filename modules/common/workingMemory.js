@@ -325,14 +325,55 @@ function sanitiseMessage(message) {
   };
 }
 
+function toTimestamp(value) {
+  if (!value) {
+    return 0;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function toSortableId(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return { number: value, string: String(value) };
+  }
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) {
+      return { number: asNumber, string: String(value) };
+    }
+    return { number: null, string: String(value) };
+  }
+  if (value === null || value === undefined) {
+    return { number: null, string: '' };
+  }
+  const asString = String(value);
+  const parsed = Number.parseInt(asString, 10);
+  if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
+    return { number: parsed, string: asString };
+  }
+  return { number: null, string: asString };
+}
+
+function compareMessagesChronologically(a, b) {
+  const aTime = toTimestamp(a?.created_at);
+  const bTime = toTimestamp(b?.created_at);
+  if (aTime !== bTime) {
+    return aTime - bTime;
+  }
+  const aId = toSortableId(a?.id);
+  const bId = toSortableId(b?.id);
+  if (aId.number !== null && bId.number !== null && aId.number !== bId.number) {
+    return aId.number - bId.number;
+  }
+  if (aId.string !== bId.string) {
+    return aId.string.localeCompare(bId.string);
+  }
+  return 0;
+}
+
 function sortMessages(messages) {
-  return messages
-    .slice()
-    .sort((a, b) => {
-      const aTime = a.created_at ? Date.parse(a.created_at) || 0 : 0;
-      const bTime = b.created_at ? Date.parse(b.created_at) || 0 : 0;
-      return aTime - bTime;
-    });
+  return messages.slice().sort(compareMessagesChronologically);
 }
 
 function limitMessages(messages, historyLength = DEFAULT_CONFIG.history_length) {
@@ -347,13 +388,14 @@ function limitMessages(messages, historyLength = DEFAULT_CONFIG.history_length) 
 }
 
 function deriveLastUserMessage(messages) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
+  let lastUserMessage = '';
+  for (let index = 0; index < messages.length; index += 1) {
     const entry = messages[index];
     if (entry?.role === 'user' && entry.content) {
-      return entry.content;
+      lastUserMessage = entry.content;
     }
   }
-  return '';
+  return lastUserMessage;
 }
 
 function sanitiseMessagesMeta(meta = {}, { lastUserMessageFallback } = {}) {
