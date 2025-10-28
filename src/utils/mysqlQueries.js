@@ -102,6 +102,44 @@ async function fetchWorkingHistoryForNode(connection, { projectId, nodeId } = {}
   return rows && rows.length ? rows[0] : null;
 }
 
+async function saveNodeWorkingHistory(connection, { projectId, nodeId, workingHistory } = {}) {
+  if (!connection) {
+    throw new Error('connection is required');
+  }
+  const trimmedProjectId = projectId ? `${projectId}`.trim() : '';
+  const trimmedNodeId = nodeId ? `${nodeId}`.trim() : '';
+  if (!trimmedProjectId) {
+    throw new Error('projectId is required');
+  }
+  if (!trimmedNodeId) {
+    throw new Error('nodeId is required');
+  }
+  let workingHistoryText = '';
+  if (workingHistory !== undefined && workingHistory !== null) {
+    if (typeof workingHistory === 'string') {
+      workingHistoryText = workingHistory;
+    } else {
+      try {
+        workingHistoryText = JSON.stringify(workingHistory);
+      } catch (error) {
+        workingHistoryText = '';
+      }
+    }
+  }
+  await executeWithLogging(
+    connection,
+    `INSERT INTO node_working_history (project_id, node_id, working_history)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE working_history = VALUES(working_history), updated_at = CURRENT_TIMESTAMP`,
+    [trimmedProjectId, trimmedNodeId, workingHistoryText]
+  );
+  return {
+    projectId: trimmedProjectId,
+    nodeId: trimmedNodeId,
+    workingHistory: workingHistoryText,
+  };
+}
+
 function parseSummaryPayload(value) {
   if (!value) {
     return null;
@@ -188,6 +226,7 @@ module.exports = {
   fetchLastUserMessageForScope,
   fetchMessagesForHistory,
   fetchWorkingHistoryForNode,
+  saveNodeWorkingHistory,
   fetchLatestSummaryText,
   fetchSessionById,
 };
