@@ -334,3 +334,10 @@
   - Extended the working-memory session manager to await node hydration payloads, refreshing messages, metadata, and working history while respecting user toggles.
   - Debounced node switches by aborting in-flight hydration requests so only the latest node selection updates the shared store.
 - Verification: Not run *(browser modules lack automated tests in this environment).* 
+## 2025-11-29 22:45 UTC
+- Files modified: `modules/main/main.js`, `modules/project/project.js`, `modules/elements/elements.js`, `agent.md`, `agent_history`.
+- Completed tasks:
+  - Updated all builders to delegate active-node changes to the working-memory hydration flow, awaiting `setWorkingMemorySession` before opening the viewer and removing manual transcript placeholders.
+  - Hardened session updates with defensive error handling when synchronising project scopes or clearing node selections.
+  - Documented the `/api/working-memory/context` endpoint and the new hydration contract so future changes preserve server-sourced data.
+- Verification: Not run *(browser builders require manual interaction outside this environment).* 
