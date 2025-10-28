@@ -24,6 +24,9 @@ export async function fetchJSON(path, options = {}) {
   if (options.keepalive) {
     finalOptions.keepalive = true;
   }
+  if (options.signal) {
+    finalOptions.signal = options.signal;
+  }
   const response = await fetch(url, finalOptions);
   if (!response.ok) {
     let message = `Request failed (${response.status})`;
@@ -47,6 +50,46 @@ export async function fetchJSON(path, options = {}) {
   }
   const text = await response.text();
   return text ? JSON.parse(text) : null;
+}
+
+export async function fetchWorkingMemoryContext({
+  sessionId,
+  nodeId,
+  projectId,
+  historyLength,
+  includeWorkingHistory,
+  signal,
+} = {}) {
+  const trimmedSession = sessionId === undefined || sessionId === null ? '' : `${sessionId}`.trim();
+  if (!trimmedSession) {
+    throw new Error('sessionId is required');
+  }
+  const params = new URLSearchParams();
+  params.set('session_id', trimmedSession);
+  if (nodeId !== undefined && nodeId !== null) {
+    const trimmedNode = `${nodeId}`.trim();
+    if (trimmedNode) {
+      params.set('node_id', trimmedNode);
+    }
+  }
+  if (projectId !== undefined && projectId !== null) {
+    const trimmedProject = `${projectId}`.trim();
+    if (trimmedProject) {
+      params.set('project_id', trimmedProject);
+    }
+  }
+  if (historyLength !== undefined && historyLength !== null) {
+    const parsed = typeof historyLength === 'number'
+      ? historyLength
+      : Number.parseInt(`${historyLength}`, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      params.set('history_length', String(parsed));
+    }
+  }
+  if (includeWorkingHistory === false) {
+    params.set('include_working_history', 'false');
+  }
+  return fetchJSON(`/api/working-memory/context?${params.toString()}`, { signal });
 }
 
 function withProjectId(payload, projectId) {

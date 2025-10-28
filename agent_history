@@ -326,4 +326,11 @@
   - Added a `/api/working-memory/context` endpoint that hydrates node-scoped chat history, last-user details, and working-history fallbacks using capped history lengths.
   - Refactored `/api/messages` to reuse shared MySQL helpers for paging, counts, and last-user lookups while keeping logging intact.
   - Introduced reusable MySQL queries plus working-memory sanitisation helpers so responses align with the established schema and guard against unbounded history fetches.
-- Verification: Not run *(database services unavailable in this environment).* 
+- Verification: Not run *(database services unavailable in this environment).*
+## 2025-11-29 21:30 UTC
+- Files modified: `modules/common/api.js`, `modules/common/workingMemory.js`, `agent_history`.
+- Completed tasks:
+  - Added a browser helper for the new working-memory context endpoint, supporting history length limits, project/node scoping, and abortable fetches.
+  - Extended the working-memory session manager to await node hydration payloads, refreshing messages, metadata, and working history while respecting user toggles.
+  - Debounced node switches by aborting in-flight hydration requests so only the latest node selection updates the shared store.
+- Verification: Not run *(browser modules lack automated tests in this environment).* 
