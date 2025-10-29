@@ -377,3 +377,10 @@ Next steps or handoff notes: Implement the plan in stages—start with the new p
 Summary of work completed: Established session-first precedence when composing working memory, migrated legacy rows to carry project/node identifiers, and added automatic cleanup for fallback records once a session persists data. Authored operator documentation covering the new mixed-mode behaviour.
 Key implementation details or architectural notes: Updated `loadWorkingMemory` to union session and fallback scopes while preferring session payloads, introduced fallback-deletion after session saves, and extended MySQL initialisation with JSON-driven backfills for missing metadata. Added regression tests around precedence/cleanup and published guidance in `docs/working_memory_mixed_mode.md`.
 Next steps or handoff notes: Monitor production data for any stubborn fallback rows; if discovered, re-save via the API to trigger deletion or review upstream writers that bypass the helpers.
+## 2025-12-02
+- Files modified: `modules/common/api.js`, `modules/common/workingMemory.js`, `tests/fetchMessagesFallback.test.js`, `agent_history`.
+- Completed tasks:
+  - Extended `fetchMessages` to accept optional `projectId`, enforced project scoping for sessionless requests, and included the identifier in generated query strings.
+  - Passed the active project identifier through the sessionless fallback inside `hydrateActiveNodeContext` so direct message reloads scope correctly.
+  - Added integration-style tests that stub `fetch` to confirm project-scoped message requests succeed without sessions while session-based queries remain unchanged.
+- Verification: `npm test` *(passes; see console log for Node's module-type warning caused by ES module parsing).* 
