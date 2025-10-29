@@ -67,7 +67,9 @@ export async function fetchWorkingMemoryContext({
     throw new Error('sessionId or projectId/nodeId are required');
   }
   const params = new URLSearchParams();
-  params.set('session_id', trimmedSession);
+  if (trimmedSession) {
+    params.set('session_id', trimmedSession);
+  }
   if (trimmedNode) {
     params.set('node_id', trimmedNode);
   }
