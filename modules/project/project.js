@@ -9,6 +9,7 @@ import {
   ensureProjectStructureIncluded,
   setWorkingMemoryNodeContext,
   setWorkingMemorySession,
+  refreshWorkingMemory,
 } from '../common/workingMemory.js';
 import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
 import {
@@ -373,6 +374,13 @@ function handleLastInteractedNodeEvent(event) {
     if (result && typeof result.then === 'function') {
       result.catch((error) => console.warn('Failed to sync working memory active node', error));
     }
+    refreshWorkingMemory({
+      projectId: state.projectId || '',
+      nodeId: activeId,
+      reason: 'node:focus',
+    }).catch((error) => {
+      console.warn('Failed to refresh working memory after node focus', error);
+    });
   }
 }
 

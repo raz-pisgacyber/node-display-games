@@ -1,5 +1,6 @@
 import { updateNode, createEdge, deleteEdge, updateEdge } from './api.js';
 import { rebuildProjectStructure } from './projectStructureService.js';
+import { refreshWorkingMemory } from './workingMemory.js';
 
 const DEFAULT_DELAY = 1700;
 const STATUS_IDLE = 'idle';
@@ -152,10 +153,16 @@ export default class AutosaveManager {
 
     let hadError = false;
 
+    const refreshedNodeIds = new Set();
+    const linkRefreshNodeIds = new Set();
+
     for (const [id, node] of Array.from(this.pendingNodes.entries())) {
       try {
-        await this.processNode(node, { keepalive });
+        const updated = await this.processNode(node, { keepalive });
         this.pendingNodes.delete(id);
+        if (updated) {
+          refreshedNodeIds.add(node.id);
+        }
       } catch (error) {
         console.error('Failed to save node', id, error);
         hadError = true;
@@ -166,8 +173,18 @@ export default class AutosaveManager {
 
     for (const [key, entry] of Array.from(this.pendingLinks.entries())) {
       try {
-        const changed = await this.processLink(entry, { keepalive });
-        structureChanged = structureChanged || changed;
+        const result = await this.processLink(entry, { keepalive });
+        if (result !== 'none') {
+          if (entry.from) {
+            linkRefreshNodeIds.add(entry.from);
+          }
+          if (entry.to) {
+            linkRefreshNodeIds.add(entry.to);
+          }
+        }
+        if (result === 'structure') {
+          structureChanged = true;
+        }
         this.pendingLinks.delete(key);
       } catch (error) {
         console.error('Failed to persist link', entry, error);
@@ -193,12 +210,15 @@ export default class AutosaveManager {
         console.error('Failed to refresh project structure after link mutation', error);
       }
     }
+
+    this.requestWorkingMemoryRefresh(refreshedNodeIds, 'context:updated');
+    this.requestWorkingMemoryRefresh(linkRefreshNodeIds, 'graph:link-changed');
   }
 
   async processNode(node, { keepalive = false } = {}) {
     const raw = typeof node.toPersistence === 'function' ? node.toPersistence() : null;
     if (!raw || !node?.id) {
-      return;
+      return false;
     }
     const body = {};
     if (raw.label !== undefined) {
@@ -213,7 +233,7 @@ export default class AutosaveManager {
       body.metaUpdates = metaUpdates;
     }
     if (!Object.keys(body).length) {
-      return;
+      return false;
     }
     const response = await updateNode(node.id, body, { projectId: this.projectId, keepalive });
     if (response && typeof response === 'object') {
@@ -231,12 +251,13 @@ export default class AutosaveManager {
         node.fullText = response.content;
       }
     }
+    return true;
   }
 
   async processLink(entry, { keepalive = false } = {}) {
     const { action, from, to, type = 'LINKS_TO', props = {} } = entry;
     if (!from || !to || !action) {
-      return false;
+      return 'none';
     }
     if (action === 'create') {
       await createEdge(
@@ -248,7 +269,7 @@ export default class AutosaveManager {
         },
         { projectId: this.projectId, keepalive }
       );
-      return true;
+      return 'structure';
     }
     if (action === 'delete') {
       await deleteEdge(
@@ -259,7 +280,7 @@ export default class AutosaveManager {
         },
         { projectId: this.projectId, keepalive }
       );
-      return true;
+      return 'structure';
     }
     if (action === 'update') {
       await updateEdge(
@@ -271,8 +292,9 @@ export default class AutosaveManager {
         },
         { projectId: this.projectId, keepalive }
       );
+      return 'props';
     }
-    return false;
+    return 'none';
   }
 
   flush(options = {}) {
@@ -282,6 +304,20 @@ export default class AutosaveManager {
 
   hasPending() {
     return this.pendingNodes.size > 0 || this.pendingLinks.size > 0 || this.inFlight;
+  }
+
+  requestWorkingMemoryRefresh(nodeIds, reason) {
+    if (!this.projectId || !nodeIds || !nodeIds.size) {
+      return;
+    }
+    Array.from(nodeIds)
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+      .forEach((nodeId) => {
+        refreshWorkingMemory({ projectId: this.projectId, nodeId, reason }).catch((error) => {
+          console.warn('Failed to refresh working memory after autosave', reason, error);
+        });
+      });
   }
 }
 
