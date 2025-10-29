@@ -593,9 +593,17 @@ function cancelNodeHydration() {
 }
 
 async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
-  if (!sessionId) {
+  // Ensure session ID comes from active state or persistent storage
+  const effectiveSessionId =
+    sessionId ||
+    window.__active_session_id ||
+    (typeof localStorage !== 'undefined' ? localStorage.getItem('session_id') : null);
+
+  if (!effectiveSessionId) {
+    console.warn('hydrateActiveNodeContext: missing sessionId');
     return;
   }
+
   cancelNodeHydration();
   nodeHydrationSequence += 1;
   const token = nodeHydrationSequence;
@@ -604,14 +612,29 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
   const includeWorkingHistory = memory.config.include_working_history !== false;
   const historyLength = normaliseHistoryLength(memory.config.history_length);
   try {
-    const payload = await fetchWorkingMemoryContext({
-      sessionId,
+    let payload = await fetchWorkingMemoryContext({
+      sessionId: effectiveSessionId,
       projectId,
       nodeId,
       historyLength,
       includeWorkingHistory,
       signal: controller.signal,
     });
+
+    // Fallback: if no messages returned, query them directly
+    if (!payload || !Array.isArray(payload.messages) || payload.messages.length === 0) {
+      try {
+        const direct = await fetchMessages({
+          sessionId: effectiveSessionId,
+          nodeId,
+          limit: historyLength,
+        });
+        payload = { ...payload, messages: direct.messages, messages_meta: direct };
+      } catch (e) {
+        console.warn('Fallback fetchMessages failed', e);
+      }
+    }
+
     if (controller.signal.aborted || token !== nodeHydrationSequence) {
       return;
     }
@@ -626,9 +649,10 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
       if (!metadata && hasLastUser) {
         metadata = {
           ...(memory.messages_meta ? memory.messages_meta : defaultMessagesMeta()),
-          last_user_message: typeof payload.last_user_message === 'string'
-            ? payload.last_user_message
-            : '',
+          last_user_message:
+            typeof payload.last_user_message === 'string'
+              ? payload.last_user_message
+              : '',
         };
       }
       const messageList = hasMessages ? payload.messages : memory.messages;
@@ -648,6 +672,7 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
     }
   }
 }
+
 
 function resetHiddenProjectStructure() {
   hiddenProjectStructure = null;

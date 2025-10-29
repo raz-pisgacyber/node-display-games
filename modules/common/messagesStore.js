@@ -171,11 +171,32 @@ export function setMessagesContext({ sessionId, nodeId } = {}) {
   const nextNodeId = normaliseNodeId(nodeId);
   const sessionChanged = nextSessionId !== state.sessionId;
   const nodeChanged = nextNodeId !== state.nodeId;
+
   if (!sessionChanged && !nodeChanged) {
     return false;
   }
+
   state.sessionId = nextSessionId;
   state.nodeId = nextNodeId;
+
+  // --- Added block to share session globally ---
+  if (nextSessionId) {
+    window.__active_session_id = nextSessionId;
+    try {
+      localStorage.setItem('session_id', nextSessionId);
+    } catch (err) {
+      console.warn('Failed to persist session_id', err);
+    }
+  } else {
+    delete window.__active_session_id;
+    try {
+      localStorage.removeItem('session_id');
+    } catch (err) {
+      console.warn('Failed to clear session_id', err);
+    }
+  }
+  // --- End added block ---
+
   state.messages = [];
   state.cursor = null;
   state.hasMore = false;
@@ -186,6 +207,7 @@ export function setMessagesContext({ sessionId, nodeId } = {}) {
   notify();
   return true;
 }
+
 
 export function resetMessagesStore() {
   state.messages = [];

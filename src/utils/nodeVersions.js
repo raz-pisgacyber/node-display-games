@@ -1,8 +1,18 @@
 const metaHash = require('./metaHash');
 const { executeWithLogging } = require('./mysqlLogger');
 
+function normalizeMySQLDate(isoString) {
+  if (!isoString) return null;
+  return isoString
+    .replace('T', ' ')
+    .replace('Z', '')
+    .replace(/(\.\d{6})\d+$/, '$1'); // keep microseconds ≤6 digits
+}
+
 async function upsertNodeVersion(connection, node) {
   const hash = metaHash(node.meta || {});
+  const cleanDate = normalizeMySQLDate(node.last_modified);
+
   const sql = `
     INSERT INTO node_versions (project_id, node_id, version_id, last_modified, meta_hash)
     VALUES (?, ?, ?, ?, ?)
@@ -12,7 +22,13 @@ async function upsertNodeVersion(connection, node) {
       meta_hash = VALUES(meta_hash),
       project_id = VALUES(project_id)
   `;
-  await executeWithLogging(connection, sql, [node.project_id, node.id, node.version_id, node.last_modified, hash]);
+  await executeWithLogging(connection, sql, [
+    node.project_id,
+    node.id,
+    node.version_id,
+    cleanDate,
+    hash
+  ]);
 }
 
 async function deleteNodeVersion(connection, nodeId, projectId) {
