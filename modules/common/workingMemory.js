@@ -640,10 +640,12 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
         const directParams = effectiveSessionId
           ? {
               sessionId: effectiveSessionId,
+              projectId: effectiveProjectId || undefined,
               nodeId: effectiveNodeId || undefined,
               limit: historyLength,
             }
           : {
+              projectId: effectiveProjectId,
               nodeId: effectiveNodeId,
               limit: historyLength,
             };

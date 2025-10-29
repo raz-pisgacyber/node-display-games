@@ -765,8 +765,13 @@ class NodeBase {
 
     const promise = (async () => {
       try {
-        await ensureSession(this.projectId);
-        const response = await fetchMessages({ nodeId: this.id, limit: 120 });
+        const session = await ensureSession(this.projectId);
+        const response = await fetchMessages({
+          sessionId: session?.id,
+          projectId: this.projectId,
+          nodeId: this.id,
+          limit: 120,
+        });
         const rawMessages = Array.isArray(response?.messages)
           ? response.messages
           : Array.isArray(response)
