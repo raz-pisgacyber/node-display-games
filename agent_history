@@ -373,3 +373,7 @@ Next steps or handoff notes: Implement the plan in stages—start with the new p
   - Propagated active node identifiers through working-memory persistence helpers to satisfy backend fallback indexing.
   - Updated working-history synchronisation to always include project and node identifiers when flushing browser state to the API.
 - Verification: Not run *(browser builders require the full stack; manual QA documented alongside the changes).* 
+## [2025-12-01 12:00 UTC] - assistant
+Summary of work completed: Established session-first precedence when composing working memory, migrated legacy rows to carry project/node identifiers, and added automatic cleanup for fallback records once a session persists data. Authored operator documentation covering the new mixed-mode behaviour.
+Key implementation details or architectural notes: Updated `loadWorkingMemory` to union session and fallback scopes while preferring session payloads, introduced fallback-deletion after session saves, and extended MySQL initialisation with JSON-driven backfills for missing metadata. Added regression tests around precedence/cleanup and published guidance in `docs/working_memory_mixed_mode.md`.
+Next steps or handoff notes: Monitor production data for any stubborn fallback rows; if discovered, re-save via the API to trigger deletion or review upstream writers that bypass the helpers.

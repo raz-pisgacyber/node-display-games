@@ -113,6 +113,7 @@ test('loadWorkingMemory reads fallback scope with derived session metadata', asy
   connection.on('FROM working_memory_parts', () => [
     [
       {
+        session_id: '',
         part: 'working_history',
         payload: '"cached"',
         project_id: 'project-2',
@@ -133,6 +134,79 @@ test('loadWorkingMemory reads fallback scope with derived session metadata', asy
   assert.equal(memory.session.project_id, 'project-2');
   assert.equal(memory.session.session_id, '');
   assert.equal(memory.session.active_node_id, 'node-9');
+});
+
+test('loadWorkingMemory prefers session-scoped parts over fallback entries', async () => {
+  const connection = new FakeConnection();
+  connection.on('FROM working_memory_parts', () => [
+    [
+      {
+        session_id: '',
+        part: 'working_history',
+        payload: '"legacy"',
+        project_id: 'project-3',
+        node_id: 'node-4',
+      },
+      {
+        session_id: 'session-24',
+        part: 'working_history',
+        payload: '"session"',
+        project_id: 'project-3',
+        node_id: 'node-4',
+      },
+    ],
+    [],
+  ], 'query');
+
+  const { memory } = await loadWorkingMemory({
+    sessionId: 'session-24',
+    projectId: 'project-3',
+    nodeId: 'node-4',
+    connection,
+  });
+
+  const selectCall = connection.calls.find((call) =>
+    call.sql.startsWith('SELECT session_id, part, payload')
+  );
+  assert(selectCall, 'load query executed');
+  assert.deepEqual(selectCall.params, ['session-24', '', 'project-3', 'node-4']);
+  assert.equal(memory.working_history, 'session');
+  assert.equal(memory.session.project_id, 'project-3');
+  assert.equal(memory.session.active_node_id, 'node-4');
+});
+
+test('loadWorkingMemory merges fallback data when session parts are missing', async () => {
+  const connection = new FakeConnection();
+  connection.on('FROM working_memory_parts', () => [
+    [
+      {
+        session_id: '',
+        part: 'working_history',
+        payload: '"fallback"',
+        project_id: 'project-7',
+        node_id: 'node-11',
+      },
+      {
+        session_id: 'session-77',
+        part: 'messages',
+        payload: '[]',
+        project_id: 'project-7',
+        node_id: 'node-11',
+      },
+    ],
+    [],
+  ], 'query');
+
+  const { memory } = await loadWorkingMemory({
+    sessionId: 'session-77',
+    projectId: 'project-7',
+    nodeId: 'node-11',
+    connection,
+  });
+
+  assert.equal(memory.working_history, 'fallback');
+  assert.deepEqual(memory.messages, []);
+  assert.equal(memory.session.active_node_id, 'node-11');
 });
 
 test('message helpers join sessions when only project/node scope is provided', async () => {
@@ -177,4 +251,24 @@ test('message helpers join sessions when only project/node scope is provided', a
   const countCall = countConnection.calls[0];
   assert(countCall.sql.includes('INNER JOIN sessions'));
   assert.deepEqual(countCall.params, ['project-join', 'node-9']);
+});
+
+test('saveWorkingMemoryPart removes fallback duplicates after session persistence', async () => {
+  const connection = new FakeConnection();
+  connection.on('DELETE FROM working_memory_parts', () => [[], []], 'execute');
+
+  await saveWorkingMemoryPart({
+    sessionId: 'session-5',
+    projectId: 'project-5',
+    nodeId: 'node-5',
+    part: 'working_history',
+    value: 'updated-history',
+    connection,
+  });
+
+  const deleteCall = connection.calls.find((call) =>
+    call.sql.startsWith('DELETE FROM working_memory_parts')
+  );
+  assert(deleteCall, 'fallback delete executed');
+  assert.deepEqual(deleteCall.params, ['project-5', 'node-5', 'working_history']);
 });
