@@ -383,4 +383,11 @@ Next steps or handoff notes: Monitor production data for any stubborn fallback r
   - Extended `fetchMessages` to accept optional `projectId`, enforced project scoping for sessionless requests, and included the identifier in generated query strings.
   - Passed the active project identifier through the sessionless fallback inside `hydrateActiveNodeContext` so direct message reloads scope correctly.
   - Added integration-style tests that stub `fetch` to confirm project-scoped message requests succeed without sessions while session-based queries remain unchanged.
-- Verification: `npm test` *(passes; see console log for Node's module-type warning caused by ES module parsing).* 
+- Verification: `npm test` *(passes; see console log for Node's module-type warning caused by ES module parsing).*
+## 2025-12-03
+- Files modified: `modules/common/api.js`, `modules/common/workingMemory.js`.
+- Completed tasks:
+  - Introduced a public `refreshWorkingMemory` helper that deduplicates project/node refresh requests by reason while reusing the existing abort/token race guard.
+  - Relaxed `hydrateActiveNodeContext` and the context-fetch helper so sessionless refreshes rely solely on project/node identifiers, preserving optimistic message updates.
+  - Documented the new helper inline to steer modules away from calling the internal hydrator directly.
+- Verification: Not run *(browser-side module changes lack automated coverage in this environment).* 

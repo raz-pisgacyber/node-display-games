@@ -589,6 +589,8 @@ let hiddenProjectStructureFrozen = false;
 let pendingLoad = null;
 let nodeHydrationController = null;
 let nodeHydrationSequence = 0;
+const pendingRefreshes = new Map();
+const DEFAULT_REFRESH_REASON = 'manual';
 
 function cancelNodeHydration() {
   if (nodeHydrationController) {
@@ -597,6 +599,11 @@ function cancelNodeHydration() {
   }
 }
 
+/**
+ * Internal helper that performs the actual working-memory hydration. Prefer using
+ * {@link refreshWorkingMemory} so duplicate refresh requests are naturally
+ * deduplicated across modules.
+ */
 async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
   // Ensure identifiers come from active state or persistent storage
   const storedSession =
@@ -612,7 +619,7 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
     nodeId === undefined ? memory.session?.active_node_id : nodeId
   ).trim();
 
-  if (!effectiveSessionId && (!effectiveProjectId || !effectiveNodeId)) {
+  if (!effectiveProjectId || !effectiveNodeId) {
     console.warn('hydrateActiveNodeContext: missing scope identifiers');
     return;
   }
@@ -693,6 +700,51 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
       nodeHydrationController = null;
     }
   }
+}
+
+function buildRefreshKey(projectId, nodeId, reason) {
+  const projectKey = safeString(projectId).trim();
+  const nodeKey = safeString(nodeId).trim();
+  const reasonKey = (() => {
+    if (reason === undefined || reason === null) {
+      return DEFAULT_REFRESH_REASON;
+    }
+    const value = safeString(reason).trim();
+    return value || DEFAULT_REFRESH_REASON;
+  })();
+  return `${projectKey}::${nodeKey}::${reasonKey}`;
+}
+
+/**
+ * Request a working-memory refresh for a specific project/node scope. Duplicate
+ * calls with the same identifiers and reason will reuse the in-flight request.
+ */
+export function refreshWorkingMemory({ projectId, nodeId, reason } = {}) {
+  const resolvedProjectId = safeString(
+    projectId === undefined ? memory.session?.project_id : projectId
+  ).trim();
+  const resolvedNodeId = safeString(
+    nodeId === undefined ? memory.session?.active_node_id : nodeId
+  ).trim();
+  if (!resolvedProjectId || !resolvedNodeId) {
+    return Promise.resolve();
+  }
+  const key = buildRefreshKey(resolvedProjectId, resolvedNodeId, reason);
+  const existing = pendingRefreshes.get(key);
+  if (existing) {
+    return existing;
+  }
+  const refreshPromise = hydrateActiveNodeContext({
+    sessionId: '',
+    projectId: resolvedProjectId,
+    nodeId: resolvedNodeId,
+  }).finally(() => {
+    if (pendingRefreshes.get(key) === refreshPromise) {
+      pendingRefreshes.delete(key);
+    }
+  });
+  pendingRefreshes.set(key, refreshPromise);
+  return refreshPromise;
 }
 
 
@@ -1034,10 +1086,10 @@ export async function setWorkingMemorySession(partial = {}) {
     (memory.session.session_id || (memory.session.project_id && memory.session.active_node_id))
   ) {
     try {
-      await hydrateActiveNodeContext({
-        sessionId: memory.session.session_id,
+      await refreshWorkingMemory({
         projectId: memory.session.project_id,
         nodeId: memory.session.active_node_id,
+        reason: 'session-node-change',
       });
     } catch (error) {
       console.warn('Failed to hydrate working memory after node change', error);
