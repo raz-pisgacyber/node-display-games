@@ -106,14 +106,21 @@ router.get('/config', (req, res) => {
 router.get('/working-memory', async (req, res, next) => {
   const sessionIdRaw = req.query?.session_id;
   const projectIdRaw = req.query?.project_id;
+  const nodeIdRaw = req.query?.node_id;
   const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
-  const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  let projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  const nodeId =
+    nodeIdRaw === undefined || nodeIdRaw === null ? '' : String(nodeIdRaw).trim();
+
   if (!sessionId) {
-    res.status(400).json({ error: 'session_id is required' });
-    return;
+    projectId = projectId || config.defaults.projectId;
+    if (!projectId || !nodeId) {
+      res.status(400).json({ error: 'project_id and node_id are required when session_id is missing' });
+      return;
+    }
   }
   try {
-    const { memory } = await loadWorkingMemory({ sessionId, projectId });
+    const { memory } = await loadWorkingMemory({ sessionId, projectId, nodeId });
     res.json({ memory });
   } catch (error) {
     next(error);
@@ -131,17 +138,28 @@ router.patch('/working-memory/:part', async (req, res, next) => {
   const sessionIdRaw = body.session_id;
   const projectIdRaw = body.project_id;
   const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
-  if (!sessionId) {
-    res.status(400).json({ error: 'session_id is required' });
-    return;
-  }
-  const projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  let projectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  const nodeIdRaw = body.node_id ?? body.nodeId;
+  const nodeId =
+    nodeIdRaw === undefined || nodeIdRaw === null ? '' : String(nodeIdRaw).trim();
   const value = body.value;
   const options = ensureObject(body.options);
+  if (nodeId && options.nodeId === undefined && options.node_id === undefined) {
+    options.nodeId = nodeId;
+  }
+  if (!sessionId) {
+    projectId = projectId || config.defaults.projectId;
+    const scopedNodeId = options.nodeId ?? options.node_id ?? nodeId;
+    if (!projectId || !scopedNodeId) {
+      res.status(400).json({ error: 'project_id and node_id are required when session_id is missing' });
+      return;
+    }
+  }
   try {
     const result = await saveWorkingMemoryPart({
       sessionId,
       projectId,
+      nodeId,
       part: normalisedPart,
       value,
       options,
@@ -872,10 +890,21 @@ router.get('/messages', async (req, res, next) => {
   try {
     const sessionId = req.query?.session_id ? String(req.query.session_id).trim() : null;
     const nodeId = req.query?.node_id ? String(req.query.node_id).trim() : null;
+    const projectIdRaw = req.query?.project_id;
+    let projectId =
+      projectIdRaw === undefined || projectIdRaw === null ? '' : String(projectIdRaw).trim();
 
     if (!sessionId && !nodeId) {
       res.status(400).json({ error: 'Either node_id or session_id is required' });
       return;
+    }
+
+    if (!sessionId) {
+      projectId = projectId || config.defaults.projectId;
+      if (!projectId) {
+        res.status(400).json({ error: 'project_id is required when session_id is missing' });
+        return;
+      }
     }
 
     const limit = parseLimitParam(req.query?.limit, 100, 500);
@@ -884,6 +913,7 @@ router.get('/messages', async (req, res, next) => {
     try {
       const page = await fetchMessagesPage(connection, {
         sessionId,
+        projectId: sessionId ? null : projectId,
         nodeId,
         limit,
         cursor,
@@ -899,8 +929,13 @@ router.get('/messages', async (req, res, next) => {
       const messages = page.messages;
       const hasMore = page.hasMore;
       const nextCursor = messages.length ? String(messages[messages.length - 1].id) : null;
-      const totalCount = await countMessagesForScope(connection, { sessionId, nodeId });
-      const lastUserMessage = await fetchLastUserMessageForScope(connection, { sessionId, nodeId });
+      const scopeProjectId = sessionId ? null : projectId;
+      const totalCount = await countMessagesForScope(connection, { sessionId, projectId: scopeProjectId, nodeId });
+      const lastUserMessage = await fetchLastUserMessageForScope(connection, {
+        sessionId,
+        projectId: scopeProjectId,
+        nodeId,
+      });
 
       res.json({
         messages,
@@ -924,13 +959,8 @@ router.get('/working-memory/context', async (req, res, next) => {
   const historyLengthRaw = req.query?.history_length;
 
   const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
-  if (!sessionId) {
-    res.status(400).json({ error: 'session_id is required' });
-    return;
-  }
-
-  const nodeId = typeof nodeIdRaw === 'string' ? nodeIdRaw.trim() : '';
-  const providedProjectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
+  let nodeId = typeof nodeIdRaw === 'string' ? nodeIdRaw.trim() : '';
+  let providedProjectId = typeof projectIdRaw === 'string' ? projectIdRaw.trim() : '';
   const parsedHistory = Number.parseInt(historyLengthRaw ?? DEFAULT_CONFIG.history_length, 10);
   const historyLength = Math.min(
     Math.max(Number.isNaN(parsedHistory) ? DEFAULT_CONFIG.history_length : parsedHistory, 1),
@@ -939,22 +969,45 @@ router.get('/working-memory/context', async (req, res, next) => {
 
   const connection = await pool.getConnection();
   try {
-    const sessionRecord = await fetchSessionById(connection, sessionId);
-    let projectId = providedProjectId || sessionRecord?.project_id || '';
-    if (!projectId) {
-      projectId = config.defaults.projectId;
+    let projectId = providedProjectId;
+    let workingNodeId = nodeId;
+
+    if (sessionId) {
+      const sessionRecord = await fetchSessionById(connection, sessionId);
+      projectId = projectId || sessionRecord?.project_id || '';
+      if (!projectId) {
+        projectId = config.defaults.projectId;
+      }
+      const activeNodeId = sessionRecord?.active_node ? String(sessionRecord.active_node).trim() : '';
+      if (!workingNodeId && activeNodeId) {
+        workingNodeId = activeNodeId;
+      }
+    } else {
+      projectId = projectId || config.defaults.projectId;
+      if (!projectId || !workingNodeId) {
+        res.status(400).json({ error: 'project_id and node_id are required when session_id is missing' });
+        return;
+      }
     }
 
-    const activeNodeId = sessionRecord?.active_node ? String(sessionRecord.active_node).trim() : '';
-    const workingNodeId = nodeId || activeNodeId;
+    const messageScopeProjectId = sessionId ? null : projectId;
 
     const messages = await fetchMessagesForHistory(connection, {
       sessionId,
-      nodeId,
+      projectId: messageScopeProjectId,
+      nodeId: workingNodeId,
       limit: historyLength,
     });
-    const totalCount = await countMessagesForScope(connection, { sessionId, nodeId });
-    const lastUserMessage = await fetchLastUserMessageForScope(connection, { sessionId, nodeId });
+    const totalCount = await countMessagesForScope(connection, {
+      sessionId,
+      projectId: messageScopeProjectId,
+      nodeId: workingNodeId,
+    });
+    const lastUserMessage = await fetchLastUserMessageForScope(connection, {
+      sessionId,
+      projectId: messageScopeProjectId,
+      nodeId: workingNodeId,
+    });
 
     let workingHistoryRecord = null;
     if (projectId && workingNodeId) {
@@ -964,7 +1017,7 @@ router.get('/working-memory/context', async (req, res, next) => {
       });
     }
     let workingHistoryText = workingHistoryRecord?.working_history || '';
-    if (!workingHistoryText) {
+    if (!workingHistoryText && sessionId) {
       workingHistoryText = await fetchLatestSummaryText(connection, {
         sessionId,
         nodeId: workingNodeId || null,

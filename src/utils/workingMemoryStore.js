@@ -53,19 +53,77 @@ function parseJsonPayload(payload) {
   return null;
 }
 
-async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
-  if (!sessionId) {
-    return { memory: buildDefaultMemory(), parts: {} };
+function normaliseIdentifier(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return `${value}`.trim();
+}
+
+function deriveWorkingMemoryScope({ sessionId, projectId, nodeId }) {
+  const trimmedSessionId = normaliseIdentifier(sessionId);
+  const trimmedProjectId = normaliseIdentifier(projectId) || config.defaults.projectId;
+  const trimmedNodeId = normaliseIdentifier(nodeId);
+
+  if (trimmedSessionId) {
+    return {
+      type: 'session',
+      sessionId: trimmedSessionId,
+      projectId: trimmedProjectId,
+      nodeId: trimmedNodeId,
+      selectClause: {
+        sql: 'session_id = ?',
+        params: [trimmedSessionId],
+      },
+    };
+  }
+
+  if (!trimmedProjectId) {
+    throw new Error('projectId is required when sessionId is missing');
+  }
+  if (!trimmedNodeId) {
+    throw new Error('nodeId is required when sessionId is missing');
+  }
+
+  return {
+    type: 'projectNode',
+    sessionId: '',
+    projectId: trimmedProjectId,
+    nodeId: trimmedNodeId,
+    selectClause: {
+      sql: 'session_id = ? AND project_id = ? AND node_id = ?',
+      params: ['', trimmedProjectId, trimmedNodeId],
+    },
+  };
+}
+
+async function loadWorkingMemory({ sessionId, projectId, nodeId, connection } = {}) {
+  const trimmedSessionId = normaliseIdentifier(sessionId);
+  const trimmedProjectId = normaliseIdentifier(projectId);
+  const trimmedNodeId = normaliseIdentifier(nodeId);
+
+  let scope;
+  try {
+    scope = deriveWorkingMemoryScope({
+      sessionId: trimmedSessionId,
+      projectId: trimmedProjectId,
+      nodeId: trimmedNodeId,
+    });
+  } catch (error) {
+    if (!trimmedSessionId) {
+      return { memory: buildDefaultMemory(), parts: {} };
+    }
+    throw error;
   }
   const ownConnection = connection || (await pool.getConnection());
   try {
     const [rows] = await queryWithLogging(
       ownConnection,
-      'SELECT part, payload, project_id FROM working_memory_parts WHERE session_id = ?',
-      [sessionId]
+      `SELECT part, payload, project_id, node_id FROM working_memory_parts WHERE ${scope.selectClause.sql}`,
+      scope.selectClause.params
     );
     const parts = {};
-    let resolvedProjectId = projectId || '';
+    let resolvedProjectId = scope.projectId || '';
     rows.forEach((row) => {
       const name = normalisePartName(row.part);
       if (!WORKING_MEMORY_PARTS.has(name)) {
@@ -76,6 +134,10 @@ async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
         resolvedProjectId = row.project_id;
       }
     });
+
+    if (!resolvedProjectId) {
+      resolvedProjectId = scope.projectId;
+    }
 
     if (parts.project_graph || parts.elements_graph) {
       const mergedStructure = sanitiseWorkingMemoryPart('project_structure', {
@@ -92,9 +154,15 @@ async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
         project_id: resolvedProjectId,
       };
     }
+    if (scope.type === 'projectNode' && scope.nodeId) {
+      parts.session = {
+        ...(parts.session || {}),
+        active_node_id: scope.nodeId,
+      };
+    }
     parts.session = {
       ...(parts.session || {}),
-      session_id: sessionId,
+      session_id: scope.sessionId,
     };
     const memory = composeWorkingMemory(parts, parts);
     return { memory, parts };
@@ -105,32 +173,63 @@ async function loadWorkingMemory({ sessionId, projectId, connection } = {}) {
   }
 }
 
-async function persistPart({ connection, sessionId, projectId, name, value }) {
+async function persistPart({ connection, sessionId, projectId, nodeId, name, value }) {
+  const serialisable = value === undefined ? null : value;
   await executeWithLogging(
     connection,
-    `INSERT INTO working_memory_parts (session_id, project_id, part, payload)
-     VALUES (?, ?, ?, CAST(? AS JSON))
-     ON DUPLICATE KEY UPDATE project_id = VALUES(project_id), payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
-    [sessionId, projectId, name, JSON.stringify(value)]
+    `INSERT INTO working_memory_parts (session_id, project_id, node_id, part, payload)
+     VALUES (?, ?, ?, ?, CAST(? AS JSON))
+     ON DUPLICATE KEY UPDATE project_id = VALUES(project_id), node_id = VALUES(node_id), payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
+    [sessionId, projectId, nodeId || '', name, JSON.stringify(serialisable)]
   );
 }
 
 async function saveWorkingMemoryPart({
   sessionId,
   projectId,
+  nodeId,
   part,
   value,
   connection,
   options = {},
 } = {}) {
-  if (!sessionId) {
-    throw new Error('sessionId is required');
-  }
   const name = normalisePartName(part);
   if (!WORKING_MEMORY_PARTS.has(name)) {
     throw new Error('Invalid working memory part');
   }
-  const targetProjectId = projectId || config.defaults.projectId;
+
+  const trimmedSessionId = normaliseIdentifier(sessionId);
+  const trimmedProjectId = normaliseIdentifier(projectId);
+  const nodeCandidates = [
+    nodeId,
+    options.nodeId,
+    options.node_id,
+    options.node,
+    options.activeNodeId,
+    options.active_node_id,
+  ];
+  let resolvedNodeId = '';
+  for (const candidate of nodeCandidates) {
+    const normalised = normaliseIdentifier(candidate);
+    if (normalised) {
+      resolvedNodeId = normalised;
+      break;
+    }
+  }
+
+  let scope;
+  try {
+    scope = deriveWorkingMemoryScope({
+      sessionId: trimmedSessionId,
+      projectId: trimmedProjectId,
+      nodeId: resolvedNodeId,
+    });
+  } catch (error) {
+    throw new Error(error?.message || 'projectId and nodeId are required when sessionId is missing');
+  }
+
+  const scopeNodeId = scope.type === 'projectNode' ? scope.nodeId : resolvedNodeId;
+  const targetProjectId = scope.projectId;
 
   const existingConnection = connection || (await pool.getConnection());
   try {
@@ -138,22 +237,25 @@ async function saveWorkingMemoryPart({
       const sanitisedStructure = sanitiseWorkingMemoryPart('project_structure', value);
       await persistPart({
         connection: existingConnection,
-        sessionId,
+        sessionId: scope.sessionId,
         projectId: targetProjectId,
+        nodeId: scopeNodeId,
         name: 'project_graph',
         value: sanitisedStructure.project_graph,
       });
       await persistPart({
         connection: existingConnection,
-        sessionId,
+        sessionId: scope.sessionId,
         projectId: targetProjectId,
+        nodeId: scopeNodeId,
         name: 'elements_graph',
         value: sanitisedStructure.elements_graph,
       });
       await persistPart({
         connection: existingConnection,
-        sessionId,
+        sessionId: scope.sessionId,
         projectId: targetProjectId,
+        nodeId: scopeNodeId,
         name: 'project_structure',
         value: sanitisedStructure,
       });
@@ -163,21 +265,18 @@ async function saveWorkingMemoryPart({
     const sanitised = sanitiseWorkingMemoryPart(name, value, options);
     await persistPart({
       connection: existingConnection,
-      sessionId,
+      sessionId: scope.sessionId,
       projectId: targetProjectId,
+      nodeId: scopeNodeId,
       name,
       value: sanitised,
     });
-    if (name === 'working_history' && targetProjectId) {
-      const rawNodeId = options.nodeId ?? options.node_id;
-      const nodeId = rawNodeId === undefined || rawNodeId === null ? '' : `${rawNodeId}`.trim();
-      if (nodeId) {
-        await saveNodeWorkingHistory(existingConnection, {
-          projectId: targetProjectId,
-          nodeId,
-          workingHistory: sanitised,
-        });
-      }
+    if (name === 'working_history' && targetProjectId && scopeNodeId) {
+      await saveNodeWorkingHistory(existingConnection, {
+        projectId: targetProjectId,
+        nodeId: scopeNodeId,
+        workingHistory: sanitised,
+      });
     }
     return { part: name, value: sanitised };
   } finally {
