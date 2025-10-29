@@ -745,6 +745,16 @@ class NodeBase {
     this.updateDiscussionComposerState();
     this.renderDiscussionStatus();
     this.loadDiscussionMessages({ force: true, showSpinner: !this.discussionInitialized });
+    const projectId = typeof this.projectId === 'string' ? this.projectId.trim() : '';
+    if (projectId) {
+      refreshWorkingMemory({
+        projectId,
+        nodeId: this.id,
+        reason: 'panel:opened',
+      }).catch((error) => {
+        console.warn('Failed to refresh working memory after opening discussion panel', error);
+      });
+    }
   }
 
   async loadDiscussionMessages({ force = false, showSpinner = true } = {}) {

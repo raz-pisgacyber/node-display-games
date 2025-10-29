@@ -10,6 +10,7 @@ import {
   updateWorkingMemorySettings,
   subscribeWorkingMemorySettings,
   resetWorkingMemory,
+  refreshWorkingMemory,
 } from '../common/workingMemory.js';
 import { buildStructureFromGraph } from '../common/projectStructure.js';
 import { openWorkingMemoryViewer } from '../common/workingMemoryViewer.js';
@@ -68,6 +69,7 @@ const runtime = {
   dragging: null,
   workingMemorySettingsUnsubscribe: null,
   messagesUnsubscribe: null,
+  hasDispatchedInitRefresh: false,
 };
 
 const ui = { workingMemoryControls: null, workingMemoryButton: null };
@@ -453,6 +455,34 @@ function syncWorkingMemoryWorkingHistory() {
   } else {
     setWorkingMemoryWorkingHistory('');
   }
+}
+
+function requestWorkingMemoryRefresh(reason) {
+  const projectId = state.projectId || state.session?.project_id || '';
+  const nodeId = state.selectedNodeId || '';
+  if (!projectId || !nodeId) {
+    return;
+  }
+  refreshWorkingMemory({ projectId, nodeId, reason }).catch((error) => {
+    console.warn(`Failed to refresh working memory (${reason})`, error);
+  });
+}
+
+function maybeTriggerInitRefresh() {
+  if (runtime.hasDispatchedInitRefresh) {
+    return;
+  }
+  const projectId = state.projectId || state.session?.project_id || '';
+  const nodeId = state.selectedNodeId || '';
+  if (!projectId || !nodeId) {
+    return;
+  }
+  runtime.hasDispatchedInitRefresh = true;
+  refreshWorkingMemory({ projectId, nodeId, reason: 'init' })
+    .catch((error) => {
+      console.warn('Failed to refresh working memory during init', error);
+      runtime.hasDispatchedInitRefresh = false;
+    });
 }
 
 function resetWorkingMemoryForProject(projectId) {
@@ -1494,6 +1524,10 @@ function selectNode(nodeId) {
   }
   syncWorkingMemoryNodeContext();
   syncWorkingMemorySession();
+  maybeTriggerInitRefresh();
+  if (nodeId) {
+    requestWorkingMemoryRefresh('node:focus');
+  }
   renderNodeInspector();
   renderEdgesPanel();
   renderGraph();
@@ -1898,6 +1932,7 @@ async function handleRestoreCheckpoint(checkpointId) {
     clearErrorBanner();
     await loadGraph();
     await loadCheckpoints();
+    requestWorkingMemoryRefresh('checkpoint:restored');
   } catch (error) {
     console.error(error);
     setErrorBanner(error?.message || 'Request failed');
@@ -2013,6 +2048,7 @@ async function checkForUpdates() {
 
 function setProjectId(projectId) {
   if (state.projectId === projectId) return;
+  runtime.hasDispatchedInitRefresh = false;
   if (projectId) {
     const context = ensureProjectContext(projectId);
     state.projectName = context?.name || '';

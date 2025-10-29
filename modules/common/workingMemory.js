@@ -591,6 +591,123 @@ let nodeHydrationController = null;
 let nodeHydrationSequence = 0;
 const pendingRefreshes = new Map();
 const DEFAULT_REFRESH_REASON = 'manual';
+const AUTO_REFRESH_MIN_INTERVAL = 500;
+
+let autoRefreshTimerId = null;
+let autoRefreshConfiguredInterval = 0;
+let autoRefreshVisibilityListenerAttached = false;
+
+function isElementVisibleForAutoRefresh(element) {
+  if (!element || !element.isConnected) {
+    return false;
+  }
+  if (element.offsetParent !== null) {
+    return true;
+  }
+  const rects = element.getClientRects?.() || [];
+  if (rects.length === 0) {
+    return false;
+  }
+  const rect = rects[0];
+  return Boolean(rect.width || rect.height);
+}
+
+function isDiscussionPanelActive() {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  const card = document.querySelector('.side-card.visible[data-type="discussion"]');
+  return isElementVisibleForAutoRefresh(card);
+}
+
+function isWorkingMemoryViewerOpen() {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  const overlay = document.querySelector('.working-memory-overlay.visible');
+  return isElementVisibleForAutoRefresh(overlay);
+}
+
+function isHistoryPanelActive() {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  const summaryPanel = document.querySelector('[data-summary-panel]');
+  if (summaryPanel && isElementVisibleForAutoRefresh(summaryPanel) && summaryPanel.matches(':focus-within')) {
+    return true;
+  }
+  const workingPanel = document.querySelector('[data-working-memory-panel]');
+  return Boolean(
+    workingPanel && isElementVisibleForAutoRefresh(workingPanel) && workingPanel.matches(':focus-within')
+  );
+}
+
+function shouldTriggerAutoRefresh() {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  if (document.hidden) {
+    return false;
+  }
+  return isWorkingMemoryViewerOpen() || isDiscussionPanelActive() || isHistoryPanelActive();
+}
+
+function runAutoRefreshTick() {
+  if (!shouldTriggerAutoRefresh()) {
+    return;
+  }
+  const projectId = safeString(memory.session?.project_id).trim();
+  const nodeId = safeString(memory.session?.active_node_id).trim();
+  if (!projectId || !nodeId) {
+    return;
+  }
+  refreshWorkingMemory({ projectId, nodeId, reason: 'interval' }).catch((error) => {
+    console.warn('Failed to refresh working memory on interval', error);
+  });
+}
+
+function ensureAutoRefreshVisibilityListener() {
+  if (typeof document === 'undefined' || autoRefreshVisibilityListenerAttached) {
+    return;
+  }
+  const handleVisibility = () => {
+    if (!document.hidden) {
+      runAutoRefreshTick();
+    }
+  };
+  document.addEventListener('visibilitychange', handleVisibility);
+  document.addEventListener('focusin', runAutoRefreshTick, true);
+  autoRefreshVisibilityListenerAttached = true;
+}
+
+function configureAutoRefreshTimer() {
+  const interval = normaliseAutoRefreshInterval(memory.config?.auto_refresh_interval);
+  const resolved = interval ? Math.max(AUTO_REFRESH_MIN_INTERVAL, interval) : 0;
+  const hasWindow = typeof window !== 'undefined';
+  if (
+    !resolved ||
+    !hasWindow ||
+    typeof window.setInterval !== 'function' ||
+    typeof window.clearInterval !== 'function'
+  ) {
+    if (hasWindow && autoRefreshTimerId) {
+      window.clearInterval(autoRefreshTimerId);
+    }
+    autoRefreshTimerId = null;
+    autoRefreshConfiguredInterval = 0;
+    return;
+  }
+  if (autoRefreshTimerId && autoRefreshConfiguredInterval === resolved) {
+    return;
+  }
+  if (autoRefreshTimerId) {
+    window.clearInterval(autoRefreshTimerId);
+    autoRefreshTimerId = null;
+  }
+  ensureAutoRefreshVisibilityListener();
+  autoRefreshTimerId = window.setInterval(runAutoRefreshTick, resolved);
+  autoRefreshConfiguredInterval = resolved;
+}
 
 function cancelNodeHydration() {
   if (nodeHydrationController) {
@@ -810,6 +927,7 @@ function notifySettings() {
       console.warn('Working memory settings listener failed', error);
     }
   });
+  configureAutoRefreshTimer();
 }
 
 function persistPart(part, value, options = null) {
@@ -1275,23 +1393,40 @@ export function setWorkingMemoryWorkingHistory(value) {
     next,
     activeNodeId ? { nodeId: activeNodeId } : undefined
   );
-  if (
-    activeNodeId &&
-    projectId &&
-    persistPromise &&
-    typeof persistPromise.then === 'function'
-  ) {
+  const shouldSyncHistory = Boolean(activeNodeId && projectId);
+  const syncNodeHistory = () => {
+    if (!shouldSyncHistory) {
+      return Promise.resolve();
+    }
+    return updateNodeWorkingHistory({
+      projectId,
+      nodeId: activeNodeId,
+      workingHistory: next,
+    }).catch((error) => {
+      console.warn('Failed to sync node working history', error);
+    });
+  };
+  const triggerRefresh = () => {
+    if (!shouldSyncHistory) {
+      return;
+    }
+    refreshWorkingMemory({
+      projectId,
+      nodeId: activeNodeId,
+      reason: 'wh:updated',
+    }).catch((error) => {
+      console.warn('Failed to refresh working memory after working history update', error);
+    });
+  };
+  if (persistPromise && typeof persistPromise.then === 'function') {
     persistPromise
-      .then(() =>
-        updateNodeWorkingHistory({
-          projectId,
-          nodeId: activeNodeId,
-          workingHistory: next,
-        })
-      )
+      .then(() => syncNodeHistory())
       .catch((error) => {
-        console.warn('Failed to sync node working history', error);
-      });
+        console.warn('Failed to persist working history part', error);
+      })
+      .finally(triggerRefresh);
+  } else {
+    syncNodeHistory().finally(triggerRefresh);
   }
   return getWorkingMemorySnapshot();
 }
