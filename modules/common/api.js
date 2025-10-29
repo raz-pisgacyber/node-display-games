@@ -208,6 +208,7 @@ export async function deleteLink(payload, { projectId, keepalive } = {}) {
 
 export async function fetchMessages({ sessionId, nodeId, projectId, limit, cursor } = {}) {
   const sessionIdText = sessionId === undefined || sessionId === null ? '' : `${sessionId}`.trim();
+  const projectIdText = projectId === undefined || projectId === null ? '' : `${projectId}`.trim();
   const nodeIdText = nodeId === undefined || nodeId === null ? '' : `${nodeId}`.trim();
   const projectIdText =
     projectId === undefined || projectId === null ? '' : `${projectId}`.trim();
