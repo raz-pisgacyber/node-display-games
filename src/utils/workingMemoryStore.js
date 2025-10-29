@@ -117,55 +117,99 @@ async function loadWorkingMemory({ sessionId, projectId, nodeId, connection } = 
   }
   const ownConnection = connection || (await pool.getConnection());
   try {
+    const clauses = [];
+    const params = [];
+    clauses.push(`(${scope.selectClause.sql})`);
+    params.push(...scope.selectClause.params);
+
+    let fallbackNodeId = '';
+    if (scope.type === 'session' && scope.projectId) {
+      const fallbackProjectId = scope.projectId;
+      const targetNodeId = scope.nodeId || trimmedNodeId || '';
+      clauses.push('(session_id = ? AND project_id = ? AND node_id = ?)');
+      params.push('', fallbackProjectId, targetNodeId);
+      fallbackNodeId = targetNodeId;
+    }
+
+    const whereClause = clauses.join(' OR ');
     const [rows] = await queryWithLogging(
       ownConnection,
-      `SELECT part, payload, project_id, node_id FROM working_memory_parts WHERE ${scope.selectClause.sql}`,
-      scope.selectClause.params
+      `SELECT session_id, part, payload, project_id, node_id FROM working_memory_parts WHERE ${whereClause}`,
+      params
     );
-    const parts = {};
-    let resolvedProjectId = scope.projectId || '';
+    const fallbackParts = {};
+    const primaryParts = {};
+    let primaryProjectId = '';
+    let primaryNodeId = '';
+    let secondaryProjectId = '';
+    let secondaryNodeId = fallbackNodeId;
     rows.forEach((row) => {
       const name = normalisePartName(row.part);
       if (!WORKING_MEMORY_PARTS.has(name)) {
         return;
       }
-      parts[name] = parseJsonPayload(row.payload);
-      if (!resolvedProjectId && row.project_id) {
-        resolvedProjectId = row.project_id;
+      const payload = parseJsonPayload(row.payload);
+      const rowSessionId = normaliseIdentifier(row.session_id);
+      if (rowSessionId && rowSessionId === scope.sessionId) {
+        primaryParts[name] = payload;
+        if (!primaryProjectId && row.project_id) {
+          primaryProjectId = row.project_id;
+        }
+        if (!primaryNodeId && row.node_id) {
+          primaryNodeId = row.node_id;
+        }
+        return;
+      }
+      if (!Object.prototype.hasOwnProperty.call(fallbackParts, name)) {
+        fallbackParts[name] = payload;
+      }
+      if (!secondaryProjectId && row.project_id) {
+        secondaryProjectId = row.project_id;
+      }
+      if (!secondaryNodeId && row.node_id) {
+        secondaryNodeId = row.node_id;
       }
     });
 
-    if (!resolvedProjectId) {
-      resolvedProjectId = scope.projectId;
-    }
+    const resolvedParts = { ...fallbackParts, ...primaryParts };
+    let resolvedProjectId = primaryProjectId || secondaryProjectId || scope.projectId || '';
+    let resolvedNodeId = primaryNodeId || secondaryNodeId || scope.nodeId || '';
 
-    if (parts.project_graph || parts.elements_graph) {
+    if (resolvedParts.project_graph || resolvedParts.elements_graph) {
       const mergedStructure = sanitiseWorkingMemoryPart('project_structure', {
-        ...(parts.project_structure || {}),
-        project_graph: parts.project_graph,
-        elements_graph: parts.elements_graph,
+        ...(resolvedParts.project_structure || {}),
+        project_graph: resolvedParts.project_graph,
+        elements_graph: resolvedParts.elements_graph,
       });
-      parts.project_structure = mergedStructure;
+      resolvedParts.project_structure = mergedStructure;
     }
 
     if (resolvedProjectId) {
-      parts.session = {
-        ...(parts.session || {}),
+      resolvedParts.session = {
+        ...(resolvedParts.session || {}),
         project_id: resolvedProjectId,
       };
     }
     if (scope.type === 'projectNode' && scope.nodeId) {
-      parts.session = {
-        ...(parts.session || {}),
+      resolvedParts.session = {
+        ...(resolvedParts.session || {}),
         active_node_id: scope.nodeId,
       };
+    } else if (resolvedNodeId) {
+      resolvedParts.session = {
+        ...(resolvedParts.session || {}),
+        active_node_id:
+          resolvedParts.session && resolvedParts.session.active_node_id
+            ? resolvedParts.session.active_node_id
+            : resolvedNodeId,
+      };
     }
-    parts.session = {
-      ...(parts.session || {}),
+    resolvedParts.session = {
+      ...(resolvedParts.session || {}),
       session_id: scope.sessionId,
     };
-    const memory = composeWorkingMemory(parts, parts);
-    return { memory, parts };
+    const memory = composeWorkingMemory(resolvedParts, resolvedParts);
+    return { memory, parts: resolvedParts };
   } finally {
     if (!connection) {
       ownConnection.release();
@@ -181,6 +225,25 @@ async function persistPart({ connection, sessionId, projectId, nodeId, name, val
      VALUES (?, ?, ?, ?, CAST(? AS JSON))
      ON DUPLICATE KEY UPDATE project_id = VALUES(project_id), node_id = VALUES(node_id), payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
     [sessionId, projectId, nodeId || '', name, JSON.stringify(serialisable)]
+  );
+}
+
+async function deleteFallbackParts(connection, { projectId, nodeId, parts }) {
+  const trimmedProjectId = normaliseIdentifier(projectId);
+  const trimmedNodeId = normaliseIdentifier(nodeId);
+  if (!trimmedProjectId || !Array.isArray(parts) || parts.length === 0) {
+    return;
+  }
+  const uniqueParts = Array.from(new Set(parts.filter((part) => typeof part === 'string' && part.trim())));
+  if (uniqueParts.length === 0) {
+    return;
+  }
+  const placeholders = uniqueParts.map(() => '?').join(', ');
+  await executeWithLogging(
+    connection,
+    `DELETE FROM working_memory_parts
+     WHERE session_id = '' AND project_id = ? AND node_id = ? AND part IN (${placeholders})`,
+    [trimmedProjectId, trimmedNodeId, ...uniqueParts]
   );
 }
 
@@ -259,6 +322,13 @@ async function saveWorkingMemoryPart({
         name: 'project_structure',
         value: sanitisedStructure,
       });
+      if (scope.type === 'session') {
+        await deleteFallbackParts(existingConnection, {
+          projectId: targetProjectId,
+          nodeId: scopeNodeId,
+          parts: ['project_graph', 'elements_graph', 'project_structure'],
+        });
+      }
       return { part: name, value: sanitisedStructure };
     }
 
@@ -271,6 +341,13 @@ async function saveWorkingMemoryPart({
       name,
       value: sanitised,
     });
+    if (scope.type === 'session') {
+      await deleteFallbackParts(existingConnection, {
+        projectId: targetProjectId,
+        nodeId: scopeNodeId,
+        parts: [name],
+      });
+    }
     if (name === 'working_history' && targetProjectId && scopeNodeId) {
       await saveNodeWorkingHistory(existingConnection, {
         projectId: targetProjectId,

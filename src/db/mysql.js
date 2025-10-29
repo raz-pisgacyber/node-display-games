@@ -162,6 +162,51 @@ async function ensureSchema(connection) {
       'ALTER TABLE working_memory_parts ADD INDEX idx_working_memory_parts_project_node (project_id, node_id)'
     );
   }
+
+  await executeWithLogging(
+    connection,
+    `UPDATE working_memory_parts wp
+     INNER JOIN sessions s ON CAST(wp.session_id AS UNSIGNED) = s.id
+     SET wp.project_id = s.project_id
+     WHERE wp.session_id <> ''
+       AND (wp.project_id = '' OR wp.project_id IS NULL)`
+  );
+
+  await executeWithLogging(
+    connection,
+    `UPDATE working_memory_parts
+     SET project_id = JSON_UNQUOTE(JSON_EXTRACT(payload, '$.project_id'))
+     WHERE session_id = ''
+       AND (project_id = '' OR project_id IS NULL)
+       AND part = 'session'
+       AND JSON_TYPE(payload) = 'OBJECT'
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.project_id')) IS NOT NULL
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.project_id')) <> ''`
+  );
+
+  await executeWithLogging(
+    connection,
+    `UPDATE working_memory_parts
+     SET node_id = JSON_UNQUOTE(JSON_EXTRACT(payload, '$.active_node_id'))
+     WHERE session_id = ''
+       AND (node_id = '' OR node_id IS NULL)
+       AND part = 'session'
+       AND JSON_TYPE(payload) = 'OBJECT'
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.active_node_id')) IS NOT NULL
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.active_node_id')) <> ''`
+  );
+
+  await executeWithLogging(
+    connection,
+    `UPDATE working_memory_parts
+     SET node_id = JSON_UNQUOTE(JSON_EXTRACT(payload, '$.id'))
+     WHERE session_id = ''
+       AND (node_id = '' OR node_id IS NULL)
+       AND part = 'node_context'
+       AND JSON_TYPE(payload) = 'OBJECT'
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.id')) IS NOT NULL
+       AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.id')) <> ''`
+  );
 }
 
 let initialisationPromise;
