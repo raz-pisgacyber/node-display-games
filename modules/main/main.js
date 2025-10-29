@@ -1917,6 +1917,7 @@ async function refreshMessages({ reset = true } = {}) {
   const contextChanged = setMessagesContext({
     sessionId: state.session.id,
     nodeId: state.selectedNodeId || null,
+    projectId: state.projectId || state.session?.project_id || '',
   });
   try {
     await fetchMessagesPage({ reset: reset || contextChanged });

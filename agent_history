@@ -391,3 +391,7 @@ Next steps or handoff notes: Monitor production data for any stubborn fallback r
   - Relaxed `hydrateActiveNodeContext` and the context-fetch helper so sessionless refreshes rely solely on project/node identifiers, preserving optimistic message updates.
   - Documented the new helper inline to steer modules away from calling the internal hydrator directly.
 - Verification: Not run *(browser-side module changes lack automated coverage in this environment).* 
+## [2025-12-04 12:00 UTC] - assistant
+Summary of work completed: Triggered working-memory refreshes after message sends, pagination, and optimistic recoveries so the chat transcript stays aligned with backend state.
+Key implementation details or architectural notes: Called `refreshWorkingMemory` from `NodeBase` after user sends and AI replies, taught the shared messages store to track the active project id, invoke the helper after paginated loads, and expose a recovery notifier, and plumbed the main builder to pass the project id into the store context.
+Next steps or handoff notes: When adding message deletion or new pagination controls, reuse `requestWorkingMemoryRefresh` with the checklist’s reasons to keep updates deduplicated.
