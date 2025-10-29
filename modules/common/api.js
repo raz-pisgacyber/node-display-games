@@ -61,22 +61,18 @@ export async function fetchWorkingMemoryContext({
   signal,
 } = {}) {
   const trimmedSession = sessionId === undefined || sessionId === null ? '' : `${sessionId}`.trim();
-  if (!trimmedSession) {
-    throw new Error('sessionId is required');
+  const trimmedNode = nodeId === undefined || nodeId === null ? '' : `${nodeId}`.trim();
+  const trimmedProject = projectId === undefined || projectId === null ? '' : `${projectId}`.trim();
+  if (!trimmedSession && (!trimmedProject || !trimmedNode)) {
+    throw new Error('sessionId or projectId/nodeId are required');
   }
   const params = new URLSearchParams();
   params.set('session_id', trimmedSession);
-  if (nodeId !== undefined && nodeId !== null) {
-    const trimmedNode = `${nodeId}`.trim();
-    if (trimmedNode) {
-      params.set('node_id', trimmedNode);
-    }
+  if (trimmedNode) {
+    params.set('node_id', trimmedNode);
   }
-  if (projectId !== undefined && projectId !== null) {
-    const trimmedProject = `${projectId}`.trim();
-    if (trimmedProject) {
-      params.set('project_id', trimmedProject);
-    }
+  if (trimmedProject) {
+    params.set('project_id', trimmedProject);
   }
   if (historyLength !== undefined && historyLength !== null) {
     const parsed = typeof historyLength === 'number'

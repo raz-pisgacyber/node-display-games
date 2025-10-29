@@ -1,4 +1,9 @@
-import { fetchJSON, fetchWorkingMemoryContext, updateNodeWorkingHistory } from './api.js';
+import {
+  fetchJSON,
+  fetchMessages,
+  fetchWorkingMemoryContext,
+  updateNodeWorkingHistory,
+} from './api.js';
 
 const DEFAULT_CONFIG = {
   history_length: 20,
@@ -593,14 +598,22 @@ function cancelNodeHydration() {
 }
 
 async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
-  // Ensure session ID comes from active state or persistent storage
-  const effectiveSessionId =
+  // Ensure identifiers come from active state or persistent storage
+  const storedSession =
     sessionId ||
+    memory.session?.session_id ||
     window.__active_session_id ||
     (typeof localStorage !== 'undefined' ? localStorage.getItem('session_id') : null);
+  const effectiveSessionId = safeString(storedSession).trim();
+  const effectiveProjectId = safeString(
+    projectId === undefined ? memory.session?.project_id : projectId
+  ).trim();
+  const effectiveNodeId = safeString(
+    nodeId === undefined ? memory.session?.active_node_id : nodeId
+  ).trim();
 
-  if (!effectiveSessionId) {
-    console.warn('hydrateActiveNodeContext: missing sessionId');
+  if (!effectiveSessionId && (!effectiveProjectId || !effectiveNodeId)) {
+    console.warn('hydrateActiveNodeContext: missing scope identifiers');
     return;
   }
 
@@ -613,9 +626,9 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
   const historyLength = normaliseHistoryLength(memory.config.history_length);
   try {
     let payload = await fetchWorkingMemoryContext({
-      sessionId: effectiveSessionId,
-      projectId,
-      nodeId,
+      sessionId: effectiveSessionId || undefined,
+      projectId: effectiveProjectId || undefined,
+      nodeId: effectiveNodeId || undefined,
       historyLength,
       includeWorkingHistory,
       signal: controller.signal,
@@ -624,11 +637,17 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
     // Fallback: if no messages returned, query them directly
     if (!payload || !Array.isArray(payload.messages) || payload.messages.length === 0) {
       try {
-        const direct = await fetchMessages({
-          sessionId: effectiveSessionId,
-          nodeId,
-          limit: historyLength,
-        });
+        const directParams = effectiveSessionId
+          ? {
+              sessionId: effectiveSessionId,
+              nodeId: effectiveNodeId || undefined,
+              limit: historyLength,
+            }
+          : {
+              nodeId: effectiveNodeId,
+              limit: historyLength,
+            };
+        const direct = await fetchMessages(directParams);
         payload = { ...payload, messages: direct.messages, messages_meta: direct };
       } catch (e) {
         console.warn('Fallback fetchMessages failed', e);
@@ -658,7 +677,11 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
       const messageList = hasMessages ? payload.messages : memory.messages;
       setWorkingMemoryMessages(messageList, metadata);
     }
-    if (includeWorkingHistory && Object.prototype.hasOwnProperty.call(payload, 'working_history')) {
+    if (
+      includeWorkingHistory &&
+      Object.prototype.hasOwnProperty.call(payload, 'working_history') &&
+      effectiveNodeId
+    ) {
       setWorkingMemoryWorkingHistory(payload.working_history);
     }
   } catch (error) {
@@ -739,17 +762,31 @@ function notifySettings() {
 }
 
 function persistPart(part, value, options = null) {
-  const sessionId = memory.session.session_id;
-  if (!sessionId) {
+  const sessionId = safeString(memory.session.session_id).trim();
+  const projectId = safeString(memory.session.project_id).trim();
+  const activeNodeId = safeString(memory.session.active_node_id).trim();
+  const payloadOptions = options ? { ...options } : {};
+  if (
+    activeNodeId &&
+    payloadOptions.nodeId === undefined &&
+    payloadOptions.node_id === undefined
+  ) {
+    payloadOptions.nodeId = activeNodeId;
+  }
+  const scopedNodeId = safeString(
+    payloadOptions.node_id ?? payloadOptions.nodeId ?? activeNodeId
+  ).trim();
+  if (!sessionId && (!projectId || !scopedNodeId)) {
     return Promise.resolve();
   }
   const body = {
     session_id: sessionId,
-    project_id: memory.session.project_id || '',
+    project_id: projectId,
+    node_id: scopedNodeId,
     value,
   };
-  if (options && Object.keys(options).length) {
-    body.options = options;
+  if (Object.keys(payloadOptions).length) {
+    body.options = payloadOptions;
   }
   return fetchJSON(`/api/working-memory/${encodeURIComponent(part)}`, {
     method: 'PATCH',
@@ -993,7 +1030,10 @@ export async function setWorkingMemorySession(partial = {}) {
   } else if (memory.session.session_id) {
     persistPart('session', { ...memory.session });
   }
-  if (nodeChanged && memory.session.session_id) {
+  if (
+    nodeChanged &&
+    (memory.session.session_id || (memory.session.project_id && memory.session.active_node_id))
+  ) {
     try {
       await hydrateActiveNodeContext({
         sessionId: memory.session.session_id,
@@ -1102,7 +1142,8 @@ export function setWorkingMemoryNodeContext(context) {
   memory.node_context = next;
   updateTimestamp();
   notifyMemory();
-  persistPart('node_context', next);
+  const targetNodeId = safeString(next.id || memory.session.active_node_id).trim();
+  persistPart('node_context', next, targetNodeId ? { nodeId: targetNodeId } : undefined);
   return getWorkingMemorySnapshot();
 }
 
@@ -1114,7 +1155,8 @@ export function setWorkingMemoryFetchedContext(context) {
   memory.fetched_context = next;
   updateTimestamp();
   notifyMemory();
-  persistPart('fetched_context', next);
+  const targetNodeId = safeString(memory.session.active_node_id).trim();
+  persistPart('fetched_context', next, targetNodeId ? { nodeId: targetNodeId } : undefined);
   return getWorkingMemorySnapshot();
 }
 
@@ -1139,11 +1181,17 @@ export function setWorkingMemoryMessages(messages, metadata = null) {
   memory.last_user_message = resolvedLastUser;
   updateTimestamp();
   notifyMemory();
-  persistPart('messages_meta', sanitisedMeta);
-  persistPart('last_user_message', memory.last_user_message, {
+  const activeNodeId = safeString(memory.session.active_node_id).trim();
+  const nodeOptions = activeNodeId ? { nodeId: activeNodeId } : undefined;
+  persistPart('messages_meta', sanitisedMeta, nodeOptions);
+  const lastUserOptions = {
     messages: nextMessages,
     metadata: sanitisedMeta,
-  });
+  };
+  if (activeNodeId) {
+    lastUserOptions.nodeId = activeNodeId;
+  }
+  persistPart('last_user_message', memory.last_user_message, lastUserOptions);
   return getWorkingMemorySnapshot();
 }
 
