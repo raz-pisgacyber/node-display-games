@@ -366,3 +366,10 @@ Next steps or handoff notes: Implement the plan in stages—start with the new p
   - Introduced `/api/node-working-history` along with shared MySQL helpers so both REST and working-memory flows upsert history into `node_working_history`.
   - Ensured working-memory persistence includes node identifiers, allowing browser and MCP pathways to keep node history in sync.
 - Verification: Not run *(database-backed endpoints require external services in this environment).* 
+## 2025-11-30 23:45 UTC
+- Files modified: `modules/common/api.js`, `modules/common/workingMemory.js`.
+- Completed tasks:
+  - Relaxed client-side working-memory guards so context fetches and persistence can rely on project/node scope when no session is available.
+  - Propagated active node identifiers through working-memory persistence helpers to satisfy backend fallback indexing.
+  - Updated working-history synchronisation to always include project and node identifiers when flushing browser state to the API.
+- Verification: Not run *(browser builders require the full stack; manual QA documented alongside the changes).* 
