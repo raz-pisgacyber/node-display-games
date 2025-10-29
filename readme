@@ -91,14 +91,16 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 
 CREATE TABLE IF NOT EXISTS working_memory_parts (
-  session_id VARCHAR(64) NOT NULL,
+  session_id VARCHAR(64) NOT NULL DEFAULT '',
   project_id VARCHAR(64) NOT NULL,
+  node_id VARCHAR(64) NOT NULL DEFAULT '',
   part VARCHAR(32) NOT NULL,
   payload JSON NOT NULL,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (session_id, part),
+  PRIMARY KEY (session_id, project_id, node_id, part),
   INDEX idx_working_memory_parts_project (project_id),
-  INDEX idx_working_memory_parts_part (part)
+  INDEX idx_working_memory_parts_part (part),
+  INDEX idx_working_memory_parts_project_node (project_id, node_id)
 );
 ```
 These definitions cover every table touched by the API. Modify types/lengths if your provider enforces different defaults.

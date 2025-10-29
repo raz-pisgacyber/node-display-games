@@ -1,35 +1,41 @@
 const { executeWithLogging } = require('./mysqlLogger');
 
-function buildMessageFilters({ sessionId, nodeId, cursor, direction = 'ASC' } = {}) {
+function buildMessageFilters({ sessionId, projectId, nodeId, cursor, direction = 'ASC' } = {}) {
   const filters = [];
   const params = [];
+  let joinSessions = false;
 
   if (sessionId) {
-    filters.push('session_id = ?');
+    filters.push('m.session_id = ?');
     params.push(sessionId);
+  } else if (projectId) {
+    joinSessions = true;
+    filters.push('s.project_id = ?');
+    params.push(projectId);
   }
   if (nodeId) {
-    filters.push('node_id = ?');
+    filters.push('m.node_id = ?');
     params.push(nodeId);
   }
   if (cursor !== null && cursor !== undefined) {
     const numericCursor = Number(cursor);
     if (!Number.isNaN(numericCursor)) {
       if (direction === 'DESC') {
-        filters.push('id < ?');
+        filters.push('m.id < ?');
       } else {
-        filters.push('id > ?');
+        filters.push('m.id > ?');
       }
       params.push(numericCursor);
     }
   }
 
   const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-  return { whereClause, params };
+  return { whereClause, params, joinSessions };
 }
 
 async function fetchMessagesPage(connection, {
   sessionId,
+  projectId,
   nodeId,
   limit,
   cursor,
@@ -40,12 +46,21 @@ async function fetchMessagesPage(connection, {
   const pageSize = includeExtraRow ? safeLimit + 1 : safeLimit;
   const order = direction === 'DESC' ? 'DESC' : 'ASC';
 
-  const { whereClause, params } = buildMessageFilters({ sessionId, nodeId, cursor, direction });
+  const { whereClause, params, joinSessions } = buildMessageFilters({
+    sessionId,
+    projectId,
+    nodeId,
+    cursor,
+    direction,
+  });
+  const fromClause = joinSessions
+    ? 'FROM messages m INNER JOIN sessions s ON m.session_id = s.id'
+    : 'FROM messages m';
   const sql = `
-    SELECT id, session_id, node_id, role, content, message_type, created_at
-    FROM messages
+    SELECT m.id, m.session_id, m.node_id, m.role, m.content, m.message_type, m.created_at
+    ${fromClause}
     ${whereClause}
-    ORDER BY id ${order}
+    ORDER BY m.id ${order}
     LIMIT ${pageSize}
   `;
 
@@ -56,20 +71,26 @@ async function fetchMessagesPage(connection, {
   return { sql, params, messages, hasMore };
 }
 
-async function countMessagesForScope(connection, { sessionId, nodeId } = {}) {
-  const { whereClause, params } = buildMessageFilters({ sessionId, nodeId });
-  const sql = `SELECT COUNT(*) AS total_count FROM messages ${whereClause}`;
+async function countMessagesForScope(connection, { sessionId, projectId, nodeId } = {}) {
+  const { whereClause, params, joinSessions } = buildMessageFilters({ sessionId, projectId, nodeId });
+  const fromClause = joinSessions
+    ? 'FROM messages m INNER JOIN sessions s ON m.session_id = s.id'
+    : 'FROM messages m';
+  const sql = `SELECT COUNT(*) AS total_count ${fromClause} ${whereClause}`;
   const [rows] = await executeWithLogging(connection, sql, params);
   return Number(rows?.[0]?.total_count || 0);
 }
 
-async function fetchLastUserMessageForScope(connection, { sessionId, nodeId } = {}) {
-  const { whereClause, params } = buildMessageFilters({ sessionId, nodeId });
+async function fetchLastUserMessageForScope(connection, { sessionId, projectId, nodeId } = {}) {
+  const { whereClause, params, joinSessions } = buildMessageFilters({ sessionId, projectId, nodeId });
+  const fromClause = joinSessions
+    ? 'FROM messages m INNER JOIN sessions s ON m.session_id = s.id'
+    : 'FROM messages m';
   const sql = `
-    SELECT content
-    FROM messages
-    ${whereClause ? `${whereClause} AND` : 'WHERE'} role = ?
-    ORDER BY id DESC
+    SELECT m.content
+    ${fromClause}
+    ${whereClause ? `${whereClause} AND` : 'WHERE'} m.role = ?
+    ORDER BY m.id DESC
     LIMIT 1
   `;
   const finalParams = [...params, 'user'];
@@ -77,9 +98,10 @@ async function fetchLastUserMessageForScope(connection, { sessionId, nodeId } = 
   return rows?.[0]?.content || '';
 }
 
-async function fetchMessagesForHistory(connection, { sessionId, nodeId, limit } = {}) {
+async function fetchMessagesForHistory(connection, { sessionId, projectId, nodeId, limit } = {}) {
   const { messages } = await fetchMessagesPage(connection, {
     sessionId,
+    projectId,
     nodeId,
     limit,
     direction: 'DESC',

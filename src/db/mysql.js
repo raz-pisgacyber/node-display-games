@@ -65,14 +65,16 @@ const SCHEMA_STATEMENTS = [
     INDEX idx_checkpoints_project (project_id)
   )`,
   `CREATE TABLE IF NOT EXISTS working_memory_parts (
-    session_id VARCHAR(64) NOT NULL,
+    session_id VARCHAR(64) NOT NULL DEFAULT '',
     project_id VARCHAR(64) NOT NULL,
+    node_id VARCHAR(64) NOT NULL DEFAULT '',
     part VARCHAR(32) NOT NULL,
     payload JSON NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (session_id, part),
+    PRIMARY KEY (session_id, project_id, node_id, part),
     INDEX idx_working_memory_parts_project (project_id),
-    INDEX idx_working_memory_parts_part (part)
+    INDEX idx_working_memory_parts_part (part),
+    INDEX idx_working_memory_parts_project_node (project_id, node_id)
   )`,
 ];
 
@@ -106,6 +108,58 @@ async function ensureSchema(connection) {
     await queryWithLogging(
       connection,
       "ALTER TABLE messages ADD COLUMN message_type VARCHAR(32) NOT NULL DEFAULT 'user_reply' AFTER role"
+    );
+  }
+
+  const [workingMemoryNodeColumn] = await queryWithLogging(
+    connection,
+    "SHOW COLUMNS FROM working_memory_parts LIKE 'node_id'"
+  );
+  if (workingMemoryNodeColumn.length === 0) {
+    await queryWithLogging(
+      connection,
+      "ALTER TABLE working_memory_parts ADD COLUMN node_id VARCHAR(64) NOT NULL DEFAULT '' AFTER project_id"
+    );
+  }
+
+  const [workingMemorySessionColumn] = await queryWithLogging(
+    connection,
+    "SHOW COLUMNS FROM working_memory_parts LIKE 'session_id'"
+  );
+  if (
+    workingMemorySessionColumn.length > 0 &&
+    (workingMemorySessionColumn[0].Default === null || workingMemorySessionColumn[0].Default === undefined)
+  ) {
+    await queryWithLogging(
+      connection,
+      "ALTER TABLE working_memory_parts MODIFY session_id VARCHAR(64) NOT NULL DEFAULT ''"
+    );
+  }
+
+  const [workingMemoryPrimary] = await queryWithLogging(
+    connection,
+    "SHOW INDEXES FROM working_memory_parts WHERE Key_name = 'PRIMARY'"
+  );
+  const workingMemoryPrimaryColumns = new Set(workingMemoryPrimary.map((row) => row.Column_name));
+  const expectedWorkingMemoryPrimary = ['session_id', 'project_id', 'node_id', 'part'];
+  const hasWorkingMemoryComposite = expectedWorkingMemoryPrimary.every((column) =>
+    workingMemoryPrimaryColumns.has(column)
+  );
+  if (!hasWorkingMemoryComposite || workingMemoryPrimary.length !== expectedWorkingMemoryPrimary.length) {
+    await queryWithLogging(
+      connection,
+      'ALTER TABLE working_memory_parts DROP PRIMARY KEY, ADD PRIMARY KEY (session_id, project_id, node_id, part)'
+    );
+  }
+
+  const [workingMemoryProjectNodeIndex] = await queryWithLogging(
+    connection,
+    "SHOW INDEXES FROM working_memory_parts WHERE Key_name = 'idx_working_memory_parts_project_node'"
+  );
+  if (workingMemoryProjectNodeIndex.length === 0) {
+    await queryWithLogging(
+      connection,
+      'ALTER TABLE working_memory_parts ADD INDEX idx_working_memory_parts_project_node (project_id, node_id)'
     );
   }
 }
