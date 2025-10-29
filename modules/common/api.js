@@ -206,11 +206,17 @@ export async function deleteLink(payload, { projectId, keepalive } = {}) {
   });
 }
 
-export async function fetchMessages({ sessionId, nodeId, limit, cursor } = {}) {
+export async function fetchMessages({ sessionId, nodeId, projectId, limit, cursor } = {}) {
   const sessionIdText = sessionId === undefined || sessionId === null ? '' : `${sessionId}`.trim();
   const nodeIdText = nodeId === undefined || nodeId === null ? '' : `${nodeId}`.trim();
+  const projectIdText =
+    projectId === undefined || projectId === null ? '' : `${projectId}`.trim();
   if (!sessionIdText && !nodeIdText) {
     throw new Error('sessionId or nodeId is required');
+  }
+  if (!sessionIdText && !projectIdText) {
+    // Sessionless requests rely on project scoping so the backend can resolve node history.
+    throw new Error('projectId is required when sessionId is not provided');
   }
   const params = new URLSearchParams();
   if (nodeIdText) {
@@ -218,6 +224,9 @@ export async function fetchMessages({ sessionId, nodeId, limit, cursor } = {}) {
   }
   if (sessionIdText) {
     params.set('session_id', sessionIdText);
+  }
+  if (projectIdText) {
+    params.set('project_id', projectIdText);
   }
   if (limit !== undefined && limit !== null) {
     const limitValue = typeof limit === 'number' ? limit : Number.parseInt(`${limit}`, 10);
