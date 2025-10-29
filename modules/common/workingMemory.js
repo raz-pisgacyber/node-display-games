@@ -637,18 +637,15 @@ async function hydrateActiveNodeContext({ sessionId, projectId, nodeId }) {
     // Fallback: if no messages returned, query them directly
     if (!payload || !Array.isArray(payload.messages) || payload.messages.length === 0) {
       try {
-        const directParams = effectiveSessionId
-          ? {
-              sessionId: effectiveSessionId,
-              projectId: effectiveProjectId || undefined,
-              nodeId: effectiveNodeId || undefined,
-              limit: historyLength,
-            }
-          : {
-              projectId: effectiveProjectId,
-              nodeId: effectiveNodeId,
-              limit: historyLength,
-            };
+        const directParams = {
+          nodeId: effectiveNodeId || undefined,
+          limit: historyLength,
+        };
+        if (effectiveSessionId) {
+          directParams.sessionId = effectiveSessionId;
+        } else if (effectiveProjectId) {
+          directParams.projectId = effectiveProjectId;
+        }
         const direct = await fetchMessages(directParams);
         payload = { ...payload, messages: direct.messages, messages_meta: direct };
       } catch (e) {

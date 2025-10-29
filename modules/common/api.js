@@ -206,12 +206,18 @@ export async function deleteLink(payload, { projectId, keepalive } = {}) {
   });
 }
 
-export async function fetchMessages({ sessionId, projectId, nodeId, limit, cursor } = {}) {
+export async function fetchMessages({ sessionId, nodeId, projectId, limit, cursor } = {}) {
   const sessionIdText = sessionId === undefined || sessionId === null ? '' : `${sessionId}`.trim();
   const projectIdText = projectId === undefined || projectId === null ? '' : `${projectId}`.trim();
   const nodeIdText = nodeId === undefined || nodeId === null ? '' : `${nodeId}`.trim();
-  if (!sessionIdText && (!projectIdText || !nodeIdText)) {
-    throw new Error('sessionId or projectId/nodeId are required');
+  const projectIdText =
+    projectId === undefined || projectId === null ? '' : `${projectId}`.trim();
+  if (!sessionIdText && !nodeIdText) {
+    throw new Error('sessionId or nodeId is required');
+  }
+  if (!sessionIdText && !projectIdText) {
+    // Sessionless requests rely on project scoping so the backend can resolve node history.
+    throw new Error('projectId is required when sessionId is not provided');
   }
   const params = new URLSearchParams();
   if (nodeIdText) {
