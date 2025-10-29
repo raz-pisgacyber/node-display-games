@@ -1,10 +1,12 @@
 import { fetchMessages as fetchMessagesApi, sendMessage as sendMessageApi } from './api.js';
+import { refreshWorkingMemory } from './workingMemory.js';
 
 const DEFAULT_PAGE_SIZE = 50;
 
 const state = {
   sessionId: '',
   nodeId: null,
+  projectId: '',
   status: 'idle',
   messages: [],
   cursor: null,
@@ -99,6 +101,13 @@ function normaliseNodeId(value) {
   return trimmed ? trimmed : null;
 }
 
+function normaliseProjectId(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return `${value}`.trim();
+}
+
 function normaliseMessage(message) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -141,6 +150,7 @@ export function getMessagesState() {
   return {
     sessionId: state.sessionId,
     nodeId: state.nodeId,
+    projectId: state.projectId,
     status: state.status,
     messages: cloneMessages(state.messages),
     cursor: state.cursor,
@@ -166,18 +176,21 @@ export function subscribeMessagesStore(listener) {
   };
 }
 
-export function setMessagesContext({ sessionId, nodeId } = {}) {
+export function setMessagesContext({ sessionId, nodeId, projectId } = {}) {
   const nextSessionId = normaliseSessionId(sessionId);
   const nextNodeId = normaliseNodeId(nodeId);
+  const nextProjectId = projectId === undefined ? state.projectId : normaliseProjectId(projectId);
   const sessionChanged = nextSessionId !== state.sessionId;
   const nodeChanged = nextNodeId !== state.nodeId;
+  const projectChanged = nextProjectId !== state.projectId;
 
-  if (!sessionChanged && !nodeChanged) {
+  if (!sessionChanged && !nodeChanged && !projectChanged) {
     return false;
   }
 
   state.sessionId = nextSessionId;
   state.nodeId = nextNodeId;
+  state.projectId = nextProjectId;
 
   // --- Added block to share session globally ---
   if (nextSessionId) {
@@ -220,6 +233,17 @@ export function resetMessagesStore() {
   notify();
 }
 
+function requestWorkingMemoryRefresh(reason) {
+  const projectId = normaliseProjectId(state.projectId);
+  const nodeId = normaliseNodeId(state.nodeId);
+  if (!projectId || !nodeId) {
+    return;
+  }
+  refreshWorkingMemory({ projectId, nodeId, reason }).catch((error) => {
+    console.warn('Failed to refresh working memory after messages update', error);
+  });
+}
+
 function buildFetchOptions({ reset, limit } = {}) {
   const options = { limit: limit || DEFAULT_PAGE_SIZE };
   if (state.nodeId) {
@@ -259,6 +283,7 @@ export async function fetchMessagesPage({ reset = false, limit } = {}) {
     state.lastUserMessage = typeof data?.last_user_message === 'string' ? data.last_user_message : '';
     state.status = 'ready';
     notify();
+    requestWorkingMemoryRefresh('message:paginate');
     return data;
   } catch (error) {
     state.status = 'error';
@@ -290,6 +315,10 @@ export async function sendMessageToSession(content, { role = 'user', messageType
 }
 
 export function clearMessagesContext() {
-  setMessagesContext({ sessionId: '', nodeId: null });
+  setMessagesContext({ sessionId: '', nodeId: null, projectId: '' });
   resetMessagesStore();
+}
+
+export function notifyOptimisticRecoverySucceeded() {
+  requestWorkingMemoryRefresh('message:recovery');
 }

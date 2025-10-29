@@ -1,6 +1,7 @@
 import util, { fadeIn, fadeOut, polarToCartesian, randomColor } from './util.js';
 import { ensureSession } from './session.js';
 import { fetchMessages, sendMessage } from '../modules/common/api.js';
+import { refreshWorkingMemory } from '../modules/common/workingMemory.js';
 
 let nodeIdCounter = 0;
 
@@ -1030,7 +1031,21 @@ class NodeBase {
 
     try {
       await sendMessage({ sessionId: session.id, nodeId: this.id, role: 'user', content: trimmed });
+      refreshWorkingMemory({
+        projectId: this.projectId,
+        nodeId: this.id,
+        reason: 'message:sent',
+      }).catch((error) => {
+        console.warn('Failed to refresh working memory after sending message', error);
+      });
       await this.loadDiscussionMessages({ force: true, showSpinner: false });
+      refreshWorkingMemory({
+        projectId: this.projectId,
+        nodeId: this.id,
+        reason: 'message:assistant',
+      }).catch((error) => {
+        console.warn('Failed to refresh working memory after assistant reply', error);
+      });
     } catch (error) {
       console.warn('Failed to send discussion message', error);
       this.discussionMessages = this.discussionMessages.filter((msg) => msg !== optimistic);
