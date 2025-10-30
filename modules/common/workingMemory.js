@@ -133,25 +133,37 @@ function sanitiseLinkedElements(list = []) {
 
 function sanitiseMeta(meta = {}, fallback = {}) {
   const source = typeof meta === 'object' && meta ? meta : {};
-  const result = {};
-  const notes = source.notes ?? fallback.notes;
-  if (typeof notes === 'string' && notes.trim()) {
+  const result = cloneJson(source) || {};
+
+  const resolvedNotes =
+    Object.prototype.hasOwnProperty.call(source, 'notes') && source.notes !== undefined
+      ? source.notes
+      : fallback.notes;
+  const notes = typeof resolvedNotes === 'string' ? resolvedNotes.trim() : '';
+  if (notes) {
     result.notes = notes;
+  } else if (Object.prototype.hasOwnProperty.call(result, 'notes')) {
+    delete result.notes;
   }
-  const customFields = source.customFields ?? fallback.customFields;
-  if (customFields) {
-    const sanitised = sanitiseCustomFields(customFields);
-    if (sanitised.length) {
-      result.customFields = sanitised;
-    }
+
+  const hasCustomFields = Object.prototype.hasOwnProperty.call(source, 'customFields');
+  const customFieldsSource = hasCustomFields ? source.customFields : fallback.customFields;
+  const customFields = sanitiseCustomFields(customFieldsSource);
+  if (customFields.length) {
+    result.customFields = customFields;
+  } else if (Object.prototype.hasOwnProperty.call(result, 'customFields')) {
+    delete result.customFields;
   }
-  const linkedElements = source.linked_elements ?? fallback.linked_elements;
-  if (linkedElements) {
-    const sanitised = sanitiseLinkedElements(linkedElements);
-    if (sanitised.length) {
-      result.linked_elements = sanitised;
-    }
+
+  const hasLinkedElements = Object.prototype.hasOwnProperty.call(source, 'linked_elements');
+  const linkedElementsSource = hasLinkedElements ? source.linked_elements : fallback.linked_elements;
+  const linkedElements = sanitiseLinkedElements(linkedElementsSource);
+  if (linkedElements.length) {
+    result.linked_elements = linkedElements;
+  } else if (Object.prototype.hasOwnProperty.call(result, 'linked_elements')) {
+    delete result.linked_elements;
   }
+
   return result;
 }
 

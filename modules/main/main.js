@@ -353,7 +353,7 @@ function deriveNodeTypeForMemory(node = {}) {
 
 function buildWorkingMemoryMeta(meta = {}, extras = {}) {
   const source = meta && typeof meta === 'object' ? meta : {};
-  const result = {};
+  const result = cloneForMemory(source) || {};
   const noteCandidates = [
     extras.notes,
     source.notes,
@@ -363,21 +363,29 @@ function buildWorkingMemoryMeta(meta = {}, extras = {}) {
   const note = noteCandidates.find((value) => typeof value === 'string' && value.trim());
   if (note) {
     result.notes = note;
+  } else if (Object.prototype.hasOwnProperty.call(result, 'notes')) {
+    delete result.notes;
   }
   const customFieldsSource =
-    extras.customFields ||
-    source.customFields ||
-    source.projectData?.customFields ||
-    source.elementData?.customFields ||
-    [];
+    extras.customFields !== undefined
+      ? extras.customFields
+      : source.customFields ||
+        source.projectData?.customFields ||
+        source.elementData?.customFields ||
+        [];
   const customFields = sanitiseCustomFields(customFieldsSource);
   if (customFields.length) {
     result.customFields = cloneForMemory(customFields);
+  } else if (Object.prototype.hasOwnProperty.call(result, 'customFields')) {
+    delete result.customFields;
   }
-  const linkedSource = extras.linked_elements || source.linked_elements || [];
+  const linkedSource =
+    extras.linked_elements !== undefined ? extras.linked_elements : source.linked_elements || [];
   const linkedElements = sanitiseLinkedElements(linkedSource);
   if (linkedElements.length) {
     result.linked_elements = cloneForMemory(linkedElements);
+  } else if (Object.prototype.hasOwnProperty.call(result, 'linked_elements')) {
+    delete result.linked_elements;
   }
   return result;
 }

@@ -411,3 +411,7 @@ Next steps or handoff notes: Monitor interval behaviour when additional panels a
 ## [2025-10-30T18:32:06Z] - assistant
 Hardened project structure refresh to skip blank project IDs, reuse cached graphs, and avoid wiping working memory with empty snapshots.
 Ensured fetchStructure and rebuildProjectStructure warn on missing scope, throw on misuse, and preserve prior graphs when new snapshots are empty.
+## [2025-12-08 12:00 UTC] - assistant
+Summary of work completed: Preserved arbitrary node meta fields across builders and working-memory persistence while ensuring notes, custom fields, and linked elements stay normalised.
+Key implementation details or architectural notes: Deep-cloned meta payloads inside `modules/common/workingMemory.js`, taught project/elements/main builders to forward the full `node.meta` structure, and added regression tests covering schema sanitisation plus MCP/viewer persistence.
+Verification: `npm test`
