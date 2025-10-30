@@ -98,23 +98,40 @@ function sanitiseLinkedProjects(list = []) {
 
 function buildWorkingMemoryMeta(meta = {}, extras = {}) {
   const source = meta && typeof meta === 'object' ? meta : {};
-  const result = {};
+  const result = cloneForMemory(source) || {};
+
   const noteCandidates = [extras.notes, source.notes, source.elementData?.notes];
   const note = noteCandidates.find((value) => typeof value === 'string' && value.trim());
   if (note) {
     result.notes = note;
+  } else if (Object.prototype.hasOwnProperty.call(result, 'notes')) {
+    delete result.notes;
   }
+
   const customFieldsSource =
-    extras.customFields || source.customFields || source.elementData?.customFields || [];
+    extras.customFields !== undefined
+      ? extras.customFields
+      : source.customFields || source.elementData?.customFields || [];
   const customFields = sanitiseCustomFields(customFieldsSource);
   if (customFields.length) {
     result.customFields = cloneForMemory(customFields);
+  } else if (Object.prototype.hasOwnProperty.call(result, 'customFields')) {
+    delete result.customFields;
   }
-  const linkedSource = extras.linked_elements || extras.linkedProjects || source.linked_elements || [];
+
+  let linkedSource = source.linked_elements || [];
+  if (extras.linked_elements !== undefined) {
+    linkedSource = extras.linked_elements;
+  } else if (extras.linkedProjects !== undefined) {
+    linkedSource = extras.linkedProjects;
+  }
   const linkedProjects = sanitiseLinkedProjects(linkedSource);
   if (linkedProjects.length) {
     result.linked_elements = cloneForMemory(linkedProjects);
+  } else if (Object.prototype.hasOwnProperty.call(result, 'linked_elements')) {
+    delete result.linked_elements;
   }
+
   return result;
 }
 
