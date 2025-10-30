@@ -86,6 +86,25 @@ function sanitiseStructure(structure) {
   return result;
 }
 
+function hasGraphContent(structure) {
+  if (!structure || typeof structure !== 'object') {
+    return false;
+  }
+  const projectNodes = Array.isArray(structure?.project_graph?.nodes)
+    ? structure.project_graph.nodes.length
+    : 0;
+  const projectEdges = Array.isArray(structure?.project_graph?.edges)
+    ? structure.project_graph.edges.length
+    : 0;
+  const elementNodes = Array.isArray(structure?.elements_graph?.nodes)
+    ? structure.elements_graph.nodes.length
+    : 0;
+  const elementEdges = Array.isArray(structure?.elements_graph?.edges)
+    ? structure.elements_graph.edges.length
+    : 0;
+  return projectNodes + projectEdges + elementNodes + elementEdges > 0;
+}
+
 const cache = {
   projectId: null,
   project_graph: null,
@@ -149,10 +168,14 @@ function shouldLoadStructure() {
 
 async function fetchStructure(projectId) {
   if (!projectId) {
-    return {
-      project_graph: EMPTY_GRAPH,
-      elements_graph: EMPTY_GRAPH,
-    };
+    console.warn(
+      '[fetchStructure] called with blank projectId, returning cached structure'
+    );
+    const cached = getCachedStructureSnapshot();
+    if (hasGraphContent(cached)) {
+      return cached;
+    }
+    throw new Error('fetchStructure called without projectId');
   }
   const graph = await fetchGraph(projectId);
   if (graph && (graph.project_graph || graph.elements_graph)) {
@@ -185,6 +208,17 @@ function applySnapshotToWorkingMemory(projectId, structure, includeStructure) {
   const snapshot = structure
     ? applyStructureToCache(structure)
     : getCachedStructureSnapshot();
+
+  if (!hasGraphContent(snapshot)) {
+    const existing = getCachedStructureSnapshot();
+    if (hasGraphContent(existing)) {
+      console.warn(
+        '[applySnapshotToWorkingMemory] ignoring empty graph snapshot for project %s',
+        projectId || 'unknown'
+      );
+      return cloneStructure(existing);
+    }
+  }
 
   setWorkingMemorySession({ project_id: projectId || '' });
 
@@ -268,6 +302,33 @@ export async function syncProjectStructureToWorkingMemory(
 }
 
 export async function rebuildProjectStructure(projectId, options = {}) {
+  if (!projectId) {
+    console.warn(
+      '[rebuildProjectStructure] blank projectId received, skipping refresh'
+    );
+    return getCachedStructureSnapshot();
+  }
   clearProjectStructureCache(projectId);
-  return syncProjectStructureToWorkingMemory(projectId, { ...options, force: true });
+  const structure = await fetchStructure(projectId).catch((error) => {
+    console.error(
+      '[rebuildProjectStructure] failed to fetch structure for project %s: %o',
+      projectId,
+      error
+    );
+    throw error;
+  });
+
+  if (!hasGraphContent(structure)) {
+    console.warn(
+      '[rebuildProjectStructure] fetched empty structure for project %s, retaining previous snapshot',
+      projectId
+    );
+    return getCachedStructureSnapshot();
+  }
+
+  return syncProjectStructureToWorkingMemory(projectId, {
+    ...options,
+    force: true,
+    structure,
+  });
 }

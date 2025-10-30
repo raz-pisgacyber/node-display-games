@@ -399,3 +399,15 @@ Next steps or handoff notes: When adding message deletion or new pagination cont
 Summary of work completed: Coordinated working-memory refresh triggers across builders, autosave, and periodic polling so node context, history, and link data stay current during collaborative edits.
 Key implementation details or architectural notes: Added reasoned `refreshWorkingMemory` calls for node focus, panel openings, autosave commits, checkpoint restores, and working-history persistence; introduced a visibility-aware auto-refresh interval guarded by existing hydration dedupe logic; and ensured the main builder issues an initial `'init'` refresh once project and node scopes resolve.
 Next steps or handoff notes: Monitor interval behaviour when additional panels adopt working-history editing, and extend the visibility detector if new UI surfaces should opt-in to automatic refreshes.
+## 2025-12-06
+- Reviewed the proposed "Initialize & Persist projectId at Hub Project Click" plan against the current hub and builder modules, documenting why the hub already persists project scope and why the plan's storage/navigation changes would break existing builder selection flows.
+- Highlighted the actual defect in `fetchStructure` returning empty graphs for falsy project ids and recommended guarding callers plus hardening the helper instead of relocating project-id setup.
+- No tests or runtime checks were executed; analysis based on static inspection only.
+
+## 2025-12-07
+- Re-analysed the working-memory rebuild path after the follow-up claim that `/api/graph` returns the full node set but the frontend drops children, confirming via code inspection that `fetchStructure` short-circuits to empty graphs whenever it receives a falsy project id.
+- Documented how `applyProjectInfo` can leave `projectId` blank, letting `rebuildProjectStructure` propagate that falsy value into `fetchStructure`, which in turn overwrites working memory with `{ nodes: [], edges: [] }` without ever calling the API.
+- No runtime experiments were performed; findings are based on the cited modules.
+## [2025-10-30T18:32:06Z] - assistant
+Hardened project structure refresh to skip blank project IDs, reuse cached graphs, and avoid wiping working memory with empty snapshots.
+Ensured fetchStructure and rebuildProjectStructure warn on missing scope, throw on misuse, and preserve prior graphs when new snapshots are empty.
