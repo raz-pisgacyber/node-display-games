@@ -415,3 +415,9 @@ Ensured fetchStructure and rebuildProjectStructure warn on missing scope, throw 
 Summary of work completed: Preserved arbitrary node meta fields across builders and working-memory persistence while ensuring notes, custom fields, and linked elements stay normalised.
 Key implementation details or architectural notes: Deep-cloned meta payloads inside `modules/common/workingMemory.js`, taught project/elements/main builders to forward the full `node.meta` structure, and added regression tests covering schema sanitisation plus MCP/viewer persistence.
 Verification: `npm test`
+## 2025-12-08 15:00 UTC
+- Files modified: `documentation.md`, `agent_history`.
+- Completed tasks:
+  - Authored `documentation.md` detailing runtime architecture, data stores, API flows, working memory persistence, and front-end data consumption so future developers can reproduce the application end to end.
+  - Recorded the update in the agent history log to comply with repository guidance.
+- Verification: Not applicable *(documentation-only update).* 
